@@ -1,9 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import HistoryModal from './HistoryModal';
 
 const AuthButton: React.FC = () => {
   const { user, loading, signIn, signOut, isFirebaseConfigured } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const closeHistory = useCallback(() => setShowHistory(false), []);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on click outside
@@ -57,64 +60,77 @@ const AuthButton: React.FC = () => {
   const firstName = user.displayName ? user.displayName.split(' ')[0] : 'User';
 
   return (
-    <div className="relative" ref={dropdownRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="auth-btn auth-btn-user"
-        aria-expanded={isOpen}
-        aria-haspopup="true"
-        style={{
-          borderColor: 'var(--border-light)',
-          backgroundColor: 'white',
-          color: 'var(--text-dark)',
-        }}
-      >
-        {user.photoURL ? (
-          <img
-            src={user.photoURL}
-            alt={user.displayName || 'User profile'}
-            className="w-6 h-6 rounded-full object-cover"
-          />
-        ) : (
-          <div 
-            className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold"
-            style={{ backgroundColor: 'var(--accent-pink)', color: 'white' }}
-          >
-            {firstName.charAt(0).toUpperCase()}
-          </div>
-        )}
-        <span className="sm:inline hidden font-medium">{firstName}</span>
-      </button>
-
-      {isOpen && (
-        <div
-          className="auth-dropdown animate-fadeIn"
+    <>
+      <div className="relative" ref={dropdownRef}>
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="auth-btn auth-btn-user"
+          aria-expanded={isOpen}
+          aria-haspopup="true"
           style={{
+            borderColor: 'var(--border-light)',
             backgroundColor: 'white',
-            border: '1px solid var(--border-light)',
+            color: 'var(--text-dark)',
           }}
         >
-          <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-light)' }}>
-            <p className="text-xs font-semibold truncate" style={{ color: 'var(--text-dark)' }}>
-              {user.displayName}
-            </p>
-            <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-              {user.email}
-            </p>
-          </div>
-          <button
-            onClick={() => {
-              setIsOpen(false);
-              void signOut();
+          {user.photoURL ? (
+            <img
+              src={user.photoURL}
+              alt={user.displayName || 'User profile'}
+              className="w-6 h-6 rounded-full object-cover"
+            />
+          ) : (
+            <div 
+              className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold"
+              style={{ backgroundColor: 'var(--accent-pink)', color: 'white' }}
+            >
+              {firstName.charAt(0).toUpperCase()}
+            </div>
+          )}
+          <span className="sm:inline hidden font-medium">{firstName}</span>
+        </button>
+
+        {isOpen && (
+          <div
+            className="auth-dropdown animate-fadeIn"
+            style={{
+              backgroundColor: 'white',
+              border: '1px solid var(--border-light)',
             }}
-            className="w-full text-left px-4 py-2 text-xs hover:bg-transparent transition-colors"
-            style={{ color: 'var(--text-dark)' }}
           >
-            Sign Out
-          </button>
-        </div>
-      )}
-    </div>
+            <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border-light)' }}>
+              <p className="text-xs font-semibold truncate" style={{ color: 'var(--text-dark)' }}>
+                {user.displayName}
+              </p>
+              <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                {user.email}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                setShowHistory(true);
+              }}
+              className="w-full text-left px-4 py-2 text-xs hover:bg-transparent transition-colors"
+              style={{ color: 'var(--text-dark)' }}
+            >
+              Past days
+            </button>
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                void signOut();
+              }}
+              className="w-full text-left px-4 py-2 text-xs hover:bg-transparent transition-colors"
+              style={{ color: 'var(--text-dark)' }}
+            >
+              Sign Out
+            </button>
+          </div>
+        )}
+      </div>
+      {showHistory && <HistoryModal onClose={closeHistory} />}
+    </>
   );
 };
 

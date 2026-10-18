@@ -107,3 +107,19 @@ test('shows streamed text before the model finishes', async () => {
     assert.equal((await reply).text, 'Hello there');
     assert.equal(shown.at(-1), 'Hello there');
 });
+
+test('reads finished tasks and stop requests from tool calls', async () => {
+    const reply = await streamAssistantReplyToUI({
+        textStream: (async function* () { yield 'Nice work!'; })(),
+        text: Promise.resolve('Nice work!'),
+        response: Promise.resolve({ messages: [] }),
+        staticToolCalls: Promise.resolve([
+            { toolName: 'completeTask', input: { title: ' Outline ' } },
+            { toolName: 'completeTask', input: { title: '' } },
+            { toolName: 'completeTask', input: { title: 'Draft' } },
+            { toolName: 'stopReminder', input: {} },
+        ]),
+    }, () => {}, "done, I'm stopping");
+    assert.deepEqual(reply.completedTasks, ['Outline', 'Draft']);
+    assert.equal(reply.stopReminder, true);
+});

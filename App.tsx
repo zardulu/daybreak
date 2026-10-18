@@ -44,6 +44,21 @@ const requestNotificationPermission = () => {
     }
 };
 
+// ponytail: check-ins only fire while the page runs. Phones suspend a backgrounded app, so its
+// check-ins arrive when it reopens; reliable background alerts need Web Push sent from a server.
+const showNotification = async (title: string, body: string) => {
+    const options = { body, icon: '/icon-192.png' };
+    const registration = await navigator.serviceWorker?.getRegistration();
+    if (registration?.active) {
+        await registration.showNotification(title, options);
+    } else {
+        new Notification(title, options);
+    }
+};
+
+const CHECKIN_REPLIES = ['Going well', "I'm stuck", 'Done with this task'];
+const WRAP_UP_REPLIES = ['It went great', 'Got distracted', 'Go another round'];
+
 const resolveCurrentTaskTitle = (taskUpdate: TaskUpdate | null, fallbackTask: string) => {
     const explicitCurrent = taskUpdate?.currentTaskTitle?.trim();
     if (explicitCurrent) return explicitCurrent;
@@ -86,8 +101,8 @@ const App: React.FC = () => {
     // Prevent concurrent API calls
     const isGeneratingRef = useRef<boolean>(false);
 
-    // Send a single check-in (used by both one-time and recurring)
-    const sendCheckin = useCallback(async (timerTask: string) => {
+    // Send a single check-in (used by both one-time and recurring), or the wrap-up when a timed session ends
+    const sendCheckin = useCallback(async (timerTask: string, sessionEnded: boolean) => {
         if (isGeneratingRef.current) {
             return;
         }
@@ -95,23 +110,22 @@ const App: React.FC = () => {
         isGeneratingRef.current = true;
 
         try {
-            const checkinMessage = await generateCheckinMessage(timerTask);
+            const checkinMessage = await generateCheckinMessage(timerTask, sessionEnded);
 
             // Show browser notification if permission granted
             if (canNotify()) {
-                try {
-                    new Notification('Focus Fairy Check-in ✨', {
-                        body: checkinMessage,
-                        icon: '/fairy.svg'
-                    });
-                } catch {
-                    // ponytail: Android Chrome only shows notifications from a service worker; until there is one, the check-in still lands in chat.
-                }
+                showNotification(sessionEnded ? 'Focus session complete 🎉' : 'Focus Fairy Check-in ✨', checkinMessage)
+                    .catch(() => { /* the check-in still lands in chat */ });
             }
 
             // Add message to chat
             const msgId = createChatMessageId();
-            const msg: ChatMessage = { id: msgId, sender: 'ai', text: `🔔 ${checkinMessage}` };
+            const msg: ChatMessage = {
+                id: msgId,
+                sender: 'ai',
+                text: `${sessionEnded ? '🎉' : '🔔'} ${checkinMessage}`,
+                quickReplies: sessionEnded ? WRAP_UP_REPLIES : CHECKIN_REPLIES,
+            };
             setMessages(prev => [...prev, msg]);
             const currentUser = userRef.current;
             if (currentUser) {
@@ -138,6 +152,9 @@ const App: React.FC = () => {
         confirmPendingTimerReplacement,
         keepCurrentTimer,
         stopTimer,
+        pauseTimer,
+        resumeTimer,
+        snoozeTimer,
     } = useCheckinTimer({ onCheckin: sendCheckin, onStart: warnIfNotificationsOff });
 
     // Hold the midnight rollover while a timer is running so it can't wipe a live session
@@ -150,10 +167,11 @@ const App: React.FC = () => {
         userRef.current = user;
     }, [user]);
 
-    const currentSessionTask = useMemo(
-        () => sessionTaskState.tasks.find(sessionTask => sessionTask.id === sessionTaskState.currentTaskId) ?? null,
-        [sessionTaskState]
-    );
+    // Finishing the current task hands focus to the next unfinished one.
+    const currentSessionTask = useMemo(() => {
+        const current = sessionTaskState.tasks.find(sessionTask => sessionTask.id === sessionTaskState.currentTaskId);
+        return current?.done ? sessionTaskState.tasks.find(sessionTask => !sessionTask.done) ?? current : current ?? null;
+    }, [sessionTaskState]);
     const currentTaskTitle = currentSessionTask?.title ?? task ?? '';
 
     const applyTaskUpdate = useCallback((taskUpdate: TaskUpdate | null, fallbackTask: string, shouldUseFallback: boolean): TaskUpdateResult => {
@@ -248,6 +266,19 @@ const App: React.FC = () => {
         };
     }, [sessionTaskState, user, task, sessionId]);
 
+    // Functional update, so it stacks on a task list applyTaskUpdate set in the same reply.
+    const setTasksDone = (tasksToMark: SessionTask[], done: boolean) => {
+        if (tasksToMark.length === 0) return;
+        const ids = new Set(tasksToMark.map(sessionTask => sessionTask.id));
+        setSessionTaskState(prev => ({
+            ...prev,
+            tasks: prev.tasks.map(sessionTask => ids.has(sessionTask.id) ? { ...sessionTask, done } : sessionTask),
+        }));
+        if (user) {
+            tasksToMark.forEach(sessionTask => void dbService.saveTask(user.uid, sessionId, { ...sessionTask, done }));
+        }
+    };
+
     const getTaskListMessageMeta = (taskUpdateResult: TaskUpdateResult): Partial<ChatMessage> => {
         if (!taskUpdateResult.shouldShowTaskList || taskUpdateResult.tasks.length === 0) {
             return {};
@@ -260,15 +291,23 @@ const App: React.FC = () => {
         };
     };
 
-    const getTaskActionStatusText = (taskUpdateResult: TaskUpdateResult, timerStarted: boolean) => {
+    const getTaskActionStatusText = (taskUpdateResult: TaskUpdateResult, timerStarted: boolean, finishedCount: number, timerStopped: boolean) => {
         const actions: string[] = [];
 
         if (taskUpdateResult.shouldShowTaskList) {
             actions.push(taskUpdateResult.tasks.length === 1 ? 'Added task to task list' : 'Added tasks to task list');
         }
 
+        if (finishedCount > 0) {
+            actions.push(finishedCount === 1 ? 'Marked task done' : 'Marked tasks done');
+        }
+
         if (timerStarted) {
             actions.push('Set timer');
+        }
+
+        if (timerStopped) {
+            actions.push('Stopped check-ins');
         }
 
         return actions.join(' and ');
@@ -404,6 +443,7 @@ const App: React.FC = () => {
 
     const sessionContext: SessionContext = {
         tasks: sessionTaskState.tasks.map(sessionTask => sessionTask.title),
+        doneTasks: sessionTaskState.tasks.filter(sessionTask => sessionTask.done).map(sessionTask => sessionTask.title),
         currentTask: currentTaskTitle || null,
         timerActive: Boolean(activeTimer),
     };
@@ -423,15 +463,23 @@ const App: React.FC = () => {
         setStreamingComplete(false);
 
         try {
-            const { text, reminder, taskUpdate } = await streamReply(history, sessionContext, setStreamingText);
+            const { text, reminder, taskUpdate, completedTasks, stopReminder } = await streamReply(history, sessionContext, setStreamingText);
 
             // Mark streaming as complete (keeps showing last text until we add message)
             setStreamingComplete(true);
 
-            const taskUpdateResult = applyTaskUpdate(taskUpdate, userText, Boolean(reminder));
+            // The user's words become the task only when there is none yet, so "check in every 10 min" isn't one.
+            const taskUpdateResult = applyTaskUpdate(taskUpdate, userText, Boolean(reminder) && !currentSessionTask);
+            const finishedTitles = new Set(completedTasks.map(normalizeTaskTitle));
+            const finishedTasks = taskUpdateResult.tasks.filter(t => !t.done && finishedTitles.has(normalizeTaskTitle(t.title)));
+            setTasksDone(finishedTasks, true);
+
+            // A new reminder sent with the stop asks to replace the timer instead, like any timer change.
+            const timerStopped = stopReminder && !reminder && activeTimer !== null;
+            if (timerStopped) stopTimer();
             // Let AI decide the reminder configuration via tool calling
             const timerStarted = handleReminderConfig(reminder, taskUpdateResult.currentTitle || currentTaskTitle || userText);
-            const actionStatusText = getTaskActionStatusText(taskUpdateResult, timerStarted);
+            const actionStatusText = getTaskActionStatusText(taskUpdateResult, timerStarted, finishedTasks.length, timerStopped);
 
             // The reply carries its status line and task list so they are saved together.
             const aiMessage: ChatMessage = {
@@ -490,6 +538,11 @@ const App: React.FC = () => {
                 displayDate={displayDate}
                 timerRemainingSeconds={timerRemainingSeconds}
                 timerType={activeTimer?.type ?? null}
+                timerPaused={activeTimer?.pausedMs !== undefined}
+                onPauseTimer={pauseTimer}
+                onResumeTimer={resumeTimer}
+                onSnoozeTimer={snoozeTimer}
+                onStopTimer={stopTimer}
                 timerConfirmation={timerConfirmation}
                 onConfirmTimerReplacement={confirmPendingTimerReplacement}
                 onKeepCurrentTimer={keepCurrentTimer}
@@ -498,6 +551,8 @@ const App: React.FC = () => {
                     <ChatInterface
                         task={task}
                         currentTask={currentTaskTitle}
+                        tasks={sessionTaskState.tasks}
+                        onToggleTask={sessionTask => setTasksDone([sessionTask], !sessionTask.done)}
                         messages={messages}
                         onSendMessage={handleSendMessage}
                         isLoading={isLoading}

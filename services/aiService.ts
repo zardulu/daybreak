@@ -39,6 +39,10 @@ export interface AIResponse {
     text: string;
     reminder: ReminderConfig | null;
     taskUpdate: TaskUpdate | null;
+    /** Titles of tasks the user said they finished. */
+    completedTasks: string[];
+    /** The user asked to stop check-ins. */
+    stopReminder: boolean;
 }
 
 // Replies and tool calls, for checking timer values in `npm run dev`. Silent in builds and tests.
@@ -61,7 +65,9 @@ function ensureStreamedAssistantText(
     streamed: string,
     parsedFromMessage: string,
     reminder: ReminderConfig | null,
-    taskUpdate: TaskUpdate | null
+    taskUpdate: TaskUpdate | null,
+    completedTasks: string[],
+    stopReminder: boolean
 ): string {
     const combined = (streamed || parsedFromMessage).trim();
     if (combined.length > 0) return combined;
@@ -79,6 +85,12 @@ function ensureStreamedAssistantText(
     }
     if (reminder) {
         return "Let's do this! I'll check in to keep you on track. You've got this ✨";
+    }
+    if (completedTasks.length > 0) {
+        return `Nice work finishing "${completedTasks[0]}"! ✨`;
+    }
+    if (stopReminder) {
+        return "Okay, no more check-ins for now. Nice work ✨";
     }
     if (taskUpdate && taskUpdate.tasks.length > 0) {
         const taskName = taskUpdate.currentTaskTitle || taskUpdate.tasks[0].title;
@@ -286,7 +298,7 @@ export async function streamAssistantReplyToUI(
     },
     onChunk: StreamCallback,
     userText: string
-): Promise<{ text: string; reminder: ReminderConfig | null; taskUpdate: TaskUpdate | null }> {
+): Promise<AIResponse> {
     let merged = await recoverAssistantTextFromStream(result, onChunk);
     let fromMessages = '';
     if (!merged.trim()) {
@@ -304,6 +316,11 @@ export async function streamAssistantReplyToUI(
 
     let reminder = extractReminderFromStaticToolCalls(staticCalls);
     const taskUpdate = extractTaskUpdateFromStaticToolCalls(staticCalls);
+    const completedTasks = staticCalls.flatMap(tc => {
+        const title = tc.toolName === 'completeTask' && (tc.input as { title?: unknown } | undefined)?.title;
+        return typeof title === 'string' && title.trim() ? [title.trim()] : [];
+    });
+    const stopReminder = staticCalls.some(tc => tc.toolName === 'stopReminder');
 
     // Auto-inject a default reminder when AI recorded tasks but didn't set one and emitted no text.
     // This prevents the fallback from asking more questions and looping forever.
@@ -315,11 +332,11 @@ export async function streamAssistantReplyToUI(
 
     reminder = applyStatedDurations(reminder, userText);
 
-    const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate);
+    const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate, completedTasks, stopReminder);
 
-    debugLog('[FocusFairy] Final response:', JSON.stringify({ replyText, reminder, taskUpdate }, null, 2));
+    debugLog('[FocusFairy] Final response:', JSON.stringify({ replyText, reminder, taskUpdate, completedTasks, stopReminder }, null, 2));
 
-    return { text: replyText, reminder, taskUpdate };
+    return { text: replyText, reminder, taskUpdate, completedTasks, stopReminder };
 }
 
 const systemInstruction = `You are Focus Fairy, a gentle and playful assistant that helps users stay focused on their tasks.
@@ -377,6 +394,10 @@ When the user mentions a task they want to work on, do NOT immediately call setR
   - General work: recurring every 20-25 minutes
 - Only use 'one-time' when user explicitly asks for a SINGLE reminder at a specific time (e.g., "remind me in exactly 1 hour").
 - Your response should mention you'll check in periodically, NOT just remind them at the end.
+
+**FINISHING** (completeTask and stopReminder tools):
+- When the user says they finished a recorded task, call completeTask with that task's exact title and celebrate briefly. Call it once per finished task.
+- When the user wants check-ins to stop (they're done for now, stepping away for a while, or ask you to stop), call stopReminder. Use it only if a check-in timer is running.
 
 **FUTURE TASK SCHEDULING** (scheduledDate field in recordTasks):
 - If the user mentions tasks for a specific future day ("tomorrow", "on Thursday", "next Monday", "June 25th"), set the scheduledDate field to that date in YYYY-MM-DD format.
@@ -504,6 +525,18 @@ For focus sessions with a duration (e.g., "work for 1 hour"), ALWAYS use recurri
     inputSchema: reminderToolSchema,
 });
 
+const completeTaskTool = tool({
+    description: 'Mark one recorded task as finished when the user says they finished it.',
+    inputSchema: z.object({
+        title: z.string().min(1).max(140).describe('The exact title of the finished task, as recorded.'),
+    }),
+});
+
+const stopReminderTool = tool({
+    description: 'Stop the running check-in timer when the user wants check-ins to stop.',
+    inputSchema: z.object({}),
+});
+
 const recordTasksTool = tool({
     description: `Record all clear, actionable tasks from the user's latest message for this browser session.
 Use this for task list memory only. Do not call it for greetings, vague messages, questions, or off-topic chat.`,
@@ -512,12 +545,13 @@ Use this for task list memory only. Do not call it for greetings, vague messages
 
 export interface SessionContext {
     tasks: string[];
+    doneTasks: string[];
     currentTask: string | null;
     timerActive: boolean;
 }
 
 /** Build the full system prompt, injecting session context if tasks are already recorded. */
-function buildSystemPrompt({ tasks, currentTask, timerActive }: SessionContext): string {
+function buildSystemPrompt({ tasks, doneTasks, currentTask, timerActive }: SessionContext): string {
     // The model has no clock; without this it guesses scheduledDate from its training data.
     const now = new Date();
     const prompt = `${systemInstruction}
@@ -537,6 +571,7 @@ Today is ${now.toDateString()} (${now.toLocaleDateString('en-CA')}). Use this to
 
 **ACTIVE SESSION CONTEXT** (auto-injected — do NOT repeat this to the user):
 - Tasks already recorded: ${taskList}. Current focus: "${currentTask || tasks[0]}".
+- Finished: ${doneTasks.length ? doneTasks.map(t => `"${t}"`).join(', ') : 'none yet'}.
 - ${timerNote}
 - Do NOT call recordTasks again for these existing tasks. Only call recordTasks if the user mentions a COMPLETELY NEW task.
 - Do NOT call setReminder again unless the user explicitly asks to change the timer.
@@ -583,19 +618,25 @@ export const streamReply = async (
         tools: {
             setReminder: setReminderTool,
             recordTasks: recordTasksTool,
+            completeTask: completeTaskTool,
+            stopReminder: stopReminderTool,
         },
     });
 
     return streamAssistantReplyToUI(result, onChunk, history[history.length - 1]?.content ?? '');
 };
 
-export const generateCheckinMessage = async (task: string): Promise<string> => {
+/** A check-in for a running timer, or a wrap-up once a timed session is over. */
+export const generateCheckinMessage = async (task: string, sessionEnded = false): Promise<string> => {
+    const wrapUp = "That's a wrap on this session! How did it go? ✨";
     // If no real task is set, use a generic check-in
     if (!task) {
-        return "Hey! Just checking in. How's your focus going? ✨";
+        return sessionEnded ? wrapUp : "Hey! Just checking in. How's your focus going? ✨";
     }
 
-    const prompt = `Generate a short, friendly check-in notification (under 15 words) for someone working on: "${task}". Don't use special formatting.`;
+    const prompt = sessionEnded
+        ? `Generate a short, warm wrap-up message (under 20 words) for someone whose focus session on "${task}" just ended. Celebrate the effort and ask how it went. Don't use special formatting.`
+        : `Generate a short, friendly check-in notification (under 15 words) for someone working on: "${task}". Don't use special formatting.`;
 
     try {
         const { provider, apiKey } = getConfig();
@@ -607,11 +648,11 @@ export const generateCheckinMessage = async (task: string): Promise<string> => {
             messages: [{ role: 'user', content: prompt }],
         });
 
-        return result.text || "Just checking in! How's your progress? ✨";
+        return result.text || (sessionEnded ? wrapUp : "Just checking in! How's your progress? ✨");
     } catch (error) {
         if (error instanceof Error && error.message.includes('No API key')) {
             throw error;
         }
-        return `How's your progress going? Keep it up! ✨`;
+        return sessionEnded ? wrapUp : `How's your progress going? Keep it up! ✨`;
     }
 };

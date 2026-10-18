@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, SessionTask } from '../types';
 import StreamingText from './StreamingText';
 
 interface ChatInterfaceProps {
     task: string;
     currentTask: string;
+    /** The live task list, shown with checkboxes on the latest turn. */
+    tasks: SessionTask[];
+    onToggleTask: (task: SessionTask) => void;
     messages: ChatMessage[];
     onSendMessage: (message: string) => void;
     isLoading: boolean;
@@ -12,7 +15,7 @@ interface ChatInterfaceProps {
     streamingComplete?: boolean;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messages, onSendMessage, isLoading, streamingText = '', streamingComplete = false }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks, onToggleTask, messages, onSendMessage, isLoading, streamingText = '', streamingComplete = false }) => {
     const [inputMessage, setInputMessage] = useState('');
     const [viewOffset, setViewOffset] = useState(0); // 0 = latest, negative = older
     const [isTaskListOpen, setIsTaskListOpen] = useState(true);
@@ -110,9 +113,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
     const showStreamParticles =
         isLoading && streamingText.length > 0 && !streamingComplete;
     const displayedCurrentTask = currentTask || task;
-    const taskListForMessage = aiMessage?.taskListSnapshot || [];
-    const currentTaskForMessage = aiMessage?.currentTaskSnapshot || displayedCurrentTask;
-    const showTaskListForMessage = Boolean(aiMessage?.showTaskList && taskListForMessage.length > 0 && !showLiveAiText);
+    // The latest turn shows the live list so tasks can be ticked off; older turns show the list as it was then.
+    const taskListForMessage = isViewingLatest ? tasks : aiMessage?.taskListSnapshot || [];
+    const currentTaskForMessage = isViewingLatest ? displayedCurrentTask : aiMessage?.currentTaskSnapshot || displayedCurrentTask;
+    const showTaskListForMessage = isViewingLatest
+        ? tasks.length > 0
+        : Boolean(aiMessage?.showTaskList && taskListForMessage.length > 0);
+    const doneCount = taskListForMessage.filter(sessionTask => sessionTask.done).length;
+    // Answers to the newest message only, until the user replies.
+    const quickReplies = isViewingLatest && !isLoading && aiMessage && aiMessage === messages[messages.length - 1]
+        ? aiMessage.quickReplies ?? []
+        : [];
     const showTaskActionStatus = Boolean(aiMessage?.showTaskActionStatus && !showLiveAiText);
     const taskActionStatusText = aiMessage?.taskActionStatusText || 'Updated';
 
@@ -153,6 +164,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
                             )}
                         </div>
 
+                        {quickReplies.length > 0 ? (
+                            <div className="task-list-container quick-replies animate-fadeIn" role="group" aria-label="Quick replies">
+                                {quickReplies.map(reply => (
+                                    <button key={reply} type="button" className="quick-reply" onClick={() => onSendMessage(reply)}>
+                                        {reply}
+                                    </button>
+                                ))}
+                            </div>
+                        ) : null}
+
                         {showTaskActionStatus ? (
                             <section
                                 className="task-list-container w-full animate-fadeIn"
@@ -188,7 +209,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
                                             Current: <span className="font-medium" style={{ color: 'var(--text-dark)' }}>{currentTaskForMessage}</span>
                                         </span>
                                         <span className="text-xs flex-shrink-0 flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>
-                                            {taskListForMessage.length} task{taskListForMessage.length === 1 ? '' : 's'}
+                                            {doneCount > 0
+                                                ? `${doneCount}/${taskListForMessage.length} done`
+                                                : `${taskListForMessage.length} task${taskListForMessage.length === 1 ? '' : 's'}`}
                                             <svg
                                                 className={`task-list-chevron${isTaskListOpen ? '' : ' task-list-chevron-closed'}`}
                                                 width="10"
@@ -208,19 +231,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
                                     >
                                         <ul className="flex flex-col gap-1.5 mt-2 pt-2 border-t" style={{ borderColor: 'var(--accent-pink)' }}>
                                             {taskListForMessage.map(sessionTask => {
-                                                const isCurrent = sessionTask.title === currentTaskForMessage;
+                                                const isCurrent = sessionTask.title === currentTaskForMessage && !sessionTask.done;
 
                                                 return (
-                                                    <li
-                                                        key={sessionTask.id}
-                                                        className="text-xs leading-snug flex items-start gap-2"
-                                                        style={{ color: isCurrent ? 'var(--text-dark)' : 'var(--text-muted)' }}
-                                                        title={sessionTask.title}
-                                                    >
-                                                        <span aria-hidden="true" className="mt-0.5">
-                                                            {isCurrent ? '•' : '○'}
-                                                        </span>
-                                                        <span className={isCurrent ? 'font-medium' : ''}>{sessionTask.title}</span>
+                                                    <li key={sessionTask.id} title={sessionTask.title}>
+                                                        <label
+                                                            className="text-xs leading-snug flex items-start gap-2"
+                                                            style={{ color: isCurrent ? 'var(--text-dark)' : 'var(--text-muted)' }}
+                                                        >
+                                                            {isViewingLatest ? (
+                                                                <input
+                                                                    type="checkbox"
+                                                                    className="task-checkbox"
+                                                                    checked={Boolean(sessionTask.done)}
+                                                                    onChange={() => onToggleTask(sessionTask)}
+                                                                />
+                                                            ) : (
+                                                                <span aria-hidden="true" className="mt-0.5">
+                                                                    {isCurrent ? '•' : '○'}
+                                                                </span>
+                                                            )}
+                                                            <span className={sessionTask.done ? 'line-through' : isCurrent ? 'font-medium' : ''}>
+                                                                {sessionTask.title}
+                                                            </span>
+                                                        </label>
                                                     </li>
                                                 );
                                             })}
