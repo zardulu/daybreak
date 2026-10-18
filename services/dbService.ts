@@ -134,7 +134,8 @@ export const loadMessages = async (uid: string, sessionId: string): Promise<Chat
       taskActionStatusText: data.taskActionStatusText,
       showTaskList: data.showTaskList,
       taskListSnapshot: data.taskListSnapshot,
-      currentTaskSnapshot: data.currentTaskSnapshot
+      currentTaskSnapshot: data.currentTaskSnapshot,
+      quickReplies: data.quickReplies
     });
   });
   return msgs;
@@ -151,7 +152,8 @@ export const saveTask = async (uid: string, sessionId: string, task: SessionTask
   await setDoc(taskRef, {
     id: task.id,
     title: task.title,
-    createdAt: task.createdAt
+    createdAt: task.createdAt,
+    done: task.done ?? false
   }, { merge: true });
 };
 
@@ -167,7 +169,8 @@ export const loadTasks = async (uid: string, sessionId: string): Promise<Session
     tasks.push({
       id: data.id || docSnap.id,
       title: data.title,
-      createdAt: data.createdAt
+      createdAt: data.createdAt,
+      done: data.done ?? false
     });
   });
   return tasks;
@@ -185,6 +188,10 @@ export const saveChatState = async (uid: string, sessionId: string, state: ChatS
     ...state,
     updatedAt: Date.now()
   }, { merge: true });
+  // The session doc carries the main task so the past-days list can name each day.
+  if (state.task) {
+    await setDoc(doc(db, 'users', uid, 'sessions', sessionId), { task: state.task }, { merge: true });
+  }
 };
 
 export const loadChatState = async (uid: string, sessionId: string): Promise<ChatState | null> => {
@@ -321,7 +328,8 @@ export const syncLocalDataToFirebase = async (
     batch.set(taskRef, {
       id: task.id,
       title: task.title,
-      createdAt: task.createdAt
+      createdAt: task.createdAt,
+      done: task.done ?? false
     }, { merge: true });
   });
 

@@ -5,6 +5,9 @@ import App from './App';
 import './firebase.config';
 import { AuthProvider } from './contexts/AuthContext';
 
+// Check-in notifications are shown through it (see public/sw.js).
+navigator.serviceWorker?.register('/sw.js').catch(() => { /* notifications fall back to new Notification() */ });
+
 const rootElement = document.getElementById('root');
 if (!rootElement) {
     throw new Error("Could not find root element to mount to");

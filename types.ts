@@ -11,12 +11,15 @@ export interface ChatMessage {
   showTaskList?: boolean;
   taskListSnapshot?: SessionTask[];
   currentTaskSnapshot?: string;
+  /** Tap-to-send answers shown under the latest message. */
+  quickReplies?: string[];
 }
 
 export interface SessionTask {
   id: string;
   title: string;
   createdAt: number;
+  done?: boolean;
 }
 
 export interface AISettings {

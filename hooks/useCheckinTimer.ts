@@ -3,11 +3,15 @@ import type { ReminderConfig } from '../services/aiService';
 
 type TimerType = ReminderConfig['type'];
 
+export const SNOOZE_MINUTES = 5;
+
 interface ActiveTimer {
     type: TimerType;
     task: string;
     durationMs: number;
     endAt: number;
+    /** Time left when paused; the countdown holds while it is set. */
+    pausedMs?: number;
 }
 
 interface PendingTimerRequest {
@@ -21,8 +25,8 @@ interface PendingTimerRequest {
 }
 
 interface CheckinTimerCallbacks {
-    /** A check-in is due for this task. */
-    onCheckin: (task: string) => void;
+    /** A check-in is due for this task. sessionEnded: it's the last one of a timed session. */
+    onCheckin: (task: string, sessionEnded: boolean) => void;
     /** A timer just started. */
     onStart: () => void;
 }
@@ -57,7 +61,7 @@ export const useCheckinTimer = ({ onCheckin, onStart }: CheckinTimerCallbacks) =
     }, [activeTimer]);
 
     const timerRemainingSeconds = activeTimer
-        ? Math.max(0, Math.ceil((activeTimer.endAt - currentTime) / 1000))
+        ? Math.max(0, Math.ceil((activeTimer.pausedMs ?? activeTimer.endAt - currentTime) / 1000))
         : null;
 
     const clearTimer = useCallback(() => {
@@ -96,6 +100,29 @@ export const useCheckinTimer = ({ onCheckin, onStart }: CheckinTimerCallbacks) =
         workerRef.current?.postMessage({ action: 'start', milliseconds, type: reminder.type });
     }, []);
 
+    // The next check-in comes after delayMs; recurring timers then go back to their usual gap.
+    const restartTimer = useCallback((timer: ActiveTimer, delayMs: number) => {
+        setActiveTimer({ ...timer, endAt: Date.now() + delayMs, pausedMs: undefined });
+        workerRef.current?.postMessage({ action: 'start', milliseconds: timer.durationMs, delay: delayMs, type: timer.type });
+    }, []);
+
+    const pauseTimer = useCallback(() => {
+        if (!activeTimer || activeTimer.pausedMs !== undefined) return;
+        workerRef.current?.postMessage({ action: 'stop' });
+        setActiveTimer({ ...activeTimer, pausedMs: Math.max(0, activeTimer.endAt - Date.now()) });
+    }, [activeTimer]);
+
+    const resumeTimer = useCallback(() => {
+        if (activeTimer?.pausedMs !== undefined) restartTimer(activeTimer, activeTimer.pausedMs);
+    }, [activeTimer, restartTimer]);
+
+    /** Push the next check-in back. A timed session runs that much longer. */
+    const snoozeTimer = useCallback(() => {
+        if (!activeTimer) return;
+        const remainingMs = activeTimer.pausedMs ?? Math.max(0, activeTimer.endAt - Date.now());
+        restartTimer(activeTimer, remainingMs + SNOOZE_MINUTES * 60 * 1000);
+    }, [activeTimer, restartTimer]);
+
     // Initialize Web Worker and handle messages
     useEffect(() => {
         const worker = new Worker('/timer-worker.js');
@@ -107,8 +134,9 @@ export const useCheckinTimer = ({ onCheckin, onStart }: CheckinTimerCallbacks) =
 
             const timerTask = timerTaskRef.current;
             if (checkinsLeftRef.current !== null) checkinsLeftRef.current -= 1;
+            const sessionEnded = checkinsLeftRef.current === 0;
 
-            if (timerTypeRef.current === 'one-time' || checkinsLeftRef.current === 0) {
+            if (timerTypeRef.current === 'one-time' || sessionEnded) {
                 // Last check-in: one-time reminders fire once, sessions end when their time is up.
                 clearTimer();
             } else if (timerTypeRef.current === 'recurring') {
@@ -120,7 +148,7 @@ export const useCheckinTimer = ({ onCheckin, onStart }: CheckinTimerCallbacks) =
                 );
             }
 
-            callbacksRef.current.onCheckin(timerTask);
+            callbacksRef.current.onCheckin(timerTask, sessionEnded);
         };
 
         return () => {
@@ -185,5 +213,8 @@ export const useCheckinTimer = ({ onCheckin, onStart }: CheckinTimerCallbacks) =
         confirmPendingTimerReplacement,
         keepCurrentTimer,
         stopTimer,
+        pauseTimer,
+        resumeTimer,
+        snoozeTimer,
     };
 };

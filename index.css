@@ -40,12 +40,49 @@ body {
 /* Compact timer tucked beneath the session date. */
 .focus-timer {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: 4px 10px;
   margin-top: 8px;
   color: var(--text-muted);
   font-size: 11px;
   letter-spacing: 0.03em;
+}
+
+.focus-timer-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.focus-timer-paused .focus-timer-dot {
+  animation: none;
+  opacity: 0.45;
+}
+
+.focus-timer-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.focus-timer-action {
+  min-height: 24px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 9999px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.focus-timer-action:hover {
+  color: var(--text-dark);
+  background: var(--accent-pink-light);
 }
 
 .focus-timer-dot {
@@ -698,6 +735,42 @@ body {
   width: 100%;
 }
 
+.task-checkbox {
+  width: 13px;
+  height: 13px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  accent-color: var(--btn-dark);
+  cursor: pointer;
+}
+
+.quick-replies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Undo the pull-up that every task-list-container gets, which would overlap the chips */
+.quick-replies + .task-list-container {
+  margin-top: -8px;
+}
+
+.quick-reply {
+  padding: 6px 12px;
+  border: 1px solid var(--accent-pink);
+  border-radius: 9999px;
+  background: white;
+  color: var(--text-dark);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.quick-reply:hover {
+  background: var(--accent-pink-light);
+}
+
 .task-action-status {
   display: inline-flex;
   align-items: center;
@@ -832,6 +905,11 @@ body {
 
   .task-list-panel {
     max-width: calc(100vw - 192px);
+  }
+
+  /* The shorter fairy row here leaves no room under the bubble for the full pull-up */
+  .quick-replies {
+    margin-top: -12px;
   }
 
   /* Reduce chat wrapper height - but not for InitialTaskInput which uses auto height */

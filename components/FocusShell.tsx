@@ -1,6 +1,7 @@
 import React from 'react';
 import AuthButton from './AuthButton';
 import { useAuth } from '../contexts/AuthContext';
+import { SNOOZE_MINUTES } from '../hooks/useCheckinTimer';
 
 interface FocusShellProps {
     children: React.ReactNode;
@@ -8,6 +9,11 @@ interface FocusShellProps {
     displayDate?: string;
     timerRemainingSeconds?: number | null;
     timerType?: 'one-time' | 'recurring' | null;
+    timerPaused?: boolean;
+    onPauseTimer?: () => void;
+    onResumeTimer?: () => void;
+    onSnoozeTimer?: () => void;
+    onStopTimer?: () => void;
     timerConfirmation?: {
         currentTask: string;
         currentType: 'one-time' | 'recurring';
@@ -32,6 +38,11 @@ const FocusShell: React.FC<FocusShellProps> = ({
     displayDate,
     timerRemainingSeconds = null,
     timerType = null,
+    timerPaused = false,
+    onPauseTimer,
+    onResumeTimer,
+    onSnoozeTimer,
+    onStopTimer,
     timerConfirmation = null,
     onConfirmTimerReplacement,
     onKeepCurrentTimer,
@@ -110,17 +121,37 @@ const FocusShell: React.FC<FocusShellProps> = ({
                     </p>
                 )}
                 {timerRemainingSeconds !== null && timerRemainingSeconds !== undefined && (
-                    <div
-                        className="focus-timer"
-                        role="status"
-                        aria-live="polite"
-                        aria-label={`${timerType === 'recurring' ? 'Next check-in' : 'Reminder'} in ${formatCountdown(timerRemainingSeconds)}`}
-                    >
-                        <span className="focus-timer-dot" aria-hidden="true" />
-                        <span className="focus-timer-label">
-                            {timerType === 'recurring' ? 'Next check-in' : 'Reminder'}
+                    <div className={`focus-timer${timerPaused ? ' focus-timer-paused' : ''}`}>
+                        <span
+                            className="focus-timer-status"
+                            role="status"
+                            aria-live="polite"
+                            aria-label={`${timerType === 'recurring' ? 'Next check-in' : 'Reminder'} in ${formatCountdown(timerRemainingSeconds)}${timerPaused ? ', paused' : ''}`}
+                        >
+                            <span className="focus-timer-dot" aria-hidden="true" />
+                            <span className="focus-timer-label">
+                                {timerPaused ? 'Paused' : timerType === 'recurring' ? 'Next check-in' : 'Reminder'}
+                            </span>
+                            <span className="focus-timer-value">{formatCountdown(timerRemainingSeconds)}</span>
                         </span>
-                        <span className="focus-timer-value">{formatCountdown(timerRemainingSeconds)}</span>
+                        <span className="focus-timer-actions">
+                            {timerPaused ? (
+                                <button type="button" className="focus-timer-action" onClick={onResumeTimer}>Resume</button>
+                            ) : (
+                                <>
+                                    <button type="button" className="focus-timer-action" onClick={onPauseTimer}>Pause</button>
+                                    <button
+                                        type="button"
+                                        className="focus-timer-action"
+                                        onClick={onSnoozeTimer}
+                                        title={`Snooze ${SNOOZE_MINUTES} minutes`}
+                                    >
+                                        +{SNOOZE_MINUTES} min
+                                    </button>
+                                </>
+                            )}
+                            <button type="button" className="focus-timer-action" onClick={onStopTimer}>Stop</button>
+                        </span>
                     </div>
                 )}
                 {timerConfirmation && (
