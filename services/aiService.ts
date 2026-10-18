@@ -21,6 +21,8 @@ export interface ChatTurn {
 export interface ReminderConfig {
     type: 'one-time' | 'recurring';
     minutes: number;
+    /** Total session length; recurring check-ins stop once it is over. */
+    sessionMinutes?: number;
     reason: string;
 }
 
@@ -130,7 +132,7 @@ async function extractAssistantTextFromResponseMessages(result: {
 }
 
 /** AI SDK v6 static tool calls use `input`, not `args`. */
-function extractReminderFromStaticToolCalls(
+export function extractReminderFromStaticToolCalls(
     staticCalls: Array<{ toolName: string; input?: unknown }>
 ): ReminderConfig | null {
     for (const tc of staticCalls) {
@@ -138,6 +140,7 @@ function extractReminderFromStaticToolCalls(
         const input = tc.input as {
             type: 'one-time' | 'recurring';
             minutes: number;
+            sessionMinutes?: unknown;
             reason: string;
         };
         if (
@@ -145,9 +148,14 @@ function extractReminderFromStaticToolCalls(
             typeof input.minutes === 'number' &&
             typeof input.reason === 'string'
         ) {
+            const sessionMinutes = typeof input.sessionMinutes === 'number' && input.sessionMinutes > 0
+                ? input.sessionMinutes
+                : undefined;
             return {
                 type: input.type,
-                minutes: input.minutes,
+                // A gap longer than the session would never check in before it ends.
+                minutes: sessionMinutes ? Math.min(input.minutes, sessionMinutes) : input.minutes,
+                sessionMinutes,
                 reason: input.reason,
             };
         }
@@ -208,18 +216,6 @@ const DEFAULT_AUTO_REMINDER: ReminderConfig = {
     reason: 'Auto-set: AI recorded tasks but did not set a reminder',
 };
 
-const normalizeReminderDuration = (
-    reminder: ReminderConfig | null,
-    explicitDurationMinutes: number | null
-): ReminderConfig | null => {
-    if (!reminder || explicitDurationMinutes === null) return reminder;
-
-    return {
-        ...reminder,
-        minutes: explicitDurationMinutes,
-    };
-};
-
 async function streamAssistantReplyToUI(
     result: {
         textStream: AsyncIterable<string>;
@@ -227,8 +223,7 @@ async function streamAssistantReplyToUI(
         response: PromiseLike<{ messages: Array<{ role: string; content: unknown }> }>;
         staticToolCalls: PromiseLike<Array<{ toolName: string; input?: unknown }>>;
     },
-    onChunk: StreamCallback,
-    explicitDurationMinutes: number | null = null
+    onChunk: StreamCallback
 ): Promise<{ text: string; reminder: ReminderConfig | null; taskUpdate: TaskUpdate | null }> {
     let merged = await recoverAssistantTextFromStream(result);
     let fromMessages = '';
@@ -257,9 +252,6 @@ async function streamAssistantReplyToUI(
         console.log('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
         reminder = DEFAULT_AUTO_REMINDER;
     }
-
-    // Explicit user durations always take precedence over model defaults or guesses.
-    reminder = normalizeReminderDuration(reminder, explicitDurationMinutes);
 
     const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate);
 
@@ -310,8 +302,8 @@ When the user mentions a task they want to work on, do NOT immediately call setR
 - If the user mentioned a deadline, include the deadline context in the reason field so check-in messages can reference urgency (e.g., "Due in 3 hours — staying on track").
 
 **FOCUS SESSION TIMING** (IMPORTANT):
-- If the user states an explicit duration, use that exact duration in the setReminder minutes field; never replace it with a default.
-- When a user mentions a duration (e.g., "for the next hour", "for 2 hours", "for 30 minutes"), set up RECURRING check-ins to keep them accountable throughout.
+- The setReminder minutes field is the gap between check-ins (recurring) or the time until the reminder (one-time). If the user says how often to check in, or exactly when to remind them, use that exact value; never replace it with a default.
+- When a user says how long they'll work (e.g., "for the next hour", "for 2 hours", "for 30 minutes"), set up RECURRING check-ins, put that total in sessionMinutes, and pick minutes from the intervals below. Never put the session length in minutes. Check-ins stop when the session ends.
 - Calculate check-in intervals based on total duration:
   - Under 30 min total: check-in every 10 minutes (recurring)
   - 30-60 min total: check-in every 15-20 minutes (recurring)
@@ -392,7 +384,10 @@ const reminderToolSchema = z.object({
         'one-time: fires once (for explicit reminders or quick tasks). recurring: repeats (for deep work/study sessions)'
     ),
     minutes: z.number().min(0.1).max(180).describe(
-        'Minutes until reminder (one-time) or between check-ins (recurring). Use exact time if user specifies one.'
+        'Minutes until reminder (one-time) or between check-ins (recurring). Use exact time if user specifies one. Not the session length.'
+    ),
+    sessionMinutes: z.number().min(0.1).max(720).optional().describe(
+        'Total session length when the user says how long they will work (e.g. "for 2 hours" = 120). Check-ins stop after it. Omit otherwise.'
     ),
     reason: z.string().describe(
         'Brief explanation of why this timing was chosen'
@@ -414,7 +409,7 @@ const setReminderTool = tool({
     description: `Set check-ins for the user's focus session.
 Use 'recurring' (default for focus sessions) to provide periodic check-ins throughout their work time - this keeps users accountable.
 Use 'one-time' ONLY when user explicitly asks for a single reminder at a specific time (e.g., "remind me in exactly 30 min").
-For focus sessions with a duration (e.g., "work for 1 hour"), ALWAYS use recurring with appropriate intervals.`,
+For focus sessions with a duration (e.g., "work for 1 hour"), ALWAYS use recurring with appropriate intervals and set sessionMinutes to the total.`,
     inputSchema: reminderToolSchema,
 });
 
@@ -498,11 +493,7 @@ export const streamReply = async (
         },
     });
 
-    return streamAssistantReplyToUI(
-        result,
-        onChunk,
-        extractTimeFromMessage(history[history.length - 1]?.content ?? '')
-    );
+    return streamAssistantReplyToUI(result, onChunk);
 };
 
 export const generateCheckinMessage = async (task: string): Promise<string> => {
@@ -530,36 +521,4 @@ export const generateCheckinMessage = async (task: string): Promise<string> => {
         }
         return `How's your progress going? Keep it up! ✨`;
     }
-};
-
-export const extractTimeFromMessage = (message: string): number | null => {
-    // The AI still decides whether a reminder should exist and whether it is
-    // one-time or recurring. This parser only makes an explicit duration
-    // authoritative when the user has stated one.
-    const MAX_INTERVAL_MINUTES = 180;
-
-    const durationPatterns = [
-        /(?:for|during|over|within|in|after)\s+(?:the\s+)?(?:next\s+)?(?:exactly\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)/i,
-        /\bnext\s+(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i,
-        /\b(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i,
-    ];
-
-    for (const pattern of durationPatterns) {
-        const match = message.match(pattern);
-        if (match && match[1]) {
-            const amount = Number(match[1]);
-            const unit = match[2].toLowerCase();
-            const minutes = unit.startsWith('hour') || unit.startsWith('hr')
-                ? amount * 60
-                : unit.startsWith('second') || unit.startsWith('sec')
-                    ? amount / 60
-                    : amount;
-
-            if (minutes > 0) {
-                return Math.min(minutes, MAX_INTERVAL_MINUTES);
-            }
-        }
-    }
-
-    return null;
 };

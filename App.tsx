@@ -92,6 +92,7 @@ const App: React.FC = () => {
         setActiveTimer(null);
         timerTypeRef.current = null;
         timerTaskRef.current = '';
+        checkinsLeftRef.current = null;
         setPendingTimerRequest(null);
     }, []);
     const { sessionId, isNewSession, displayDate, sessionLoading } = useDailySession(user, handleSessionChange);
@@ -123,6 +124,7 @@ const App: React.FC = () => {
     const workerRef = useRef<Worker | null>(null);
     const currentTaskRef = useRef<string>(''); // Store current task for worker callback
     const timerTaskRef = useRef<string>(''); // Keep active timer check-ins tied to their original task
+    const checkinsLeftRef = useRef<number | null>(null); // Recurring check-ins left in the session; null = no end
 
     // Refresh the visible countdown once per second while a timer is running.
     useEffect(() => {
@@ -514,6 +516,7 @@ const App: React.FC = () => {
         currentTaskRef.current = fallbackTask;
         timerTaskRef.current = fallbackTask;
         timerTypeRef.current = 'one-time';
+        checkinsLeftRef.current = null;
 
         const milliseconds = minutes * 60 * 1000;
         const timeDisplay = minutes >= 1 ? `${minutes} minute(s)` : `${Math.round(minutes * 60)} seconds`;
@@ -547,11 +550,13 @@ const App: React.FC = () => {
     }, [user, sessionId]);
 
     // Recurring check-in - using Web Worker for reliable background execution
-    const startRecurringCheckin = useCallback((minutes: number, fallbackTask: string) => {
+    const startRecurringCheckin = useCallback((minutes: number, fallbackTask: string, sessionMinutes?: number) => {
         // Store task for callback
         currentTaskRef.current = fallbackTask;
         timerTaskRef.current = fallbackTask;
         timerTypeRef.current = 'recurring';
+        // Epsilon keeps float division (e.g. 0.3 / 0.1) from dropping the last check-in.
+        checkinsLeftRef.current = sessionMinutes ? Math.floor(sessionMinutes / minutes + 1e-6) : null;
 
         const milliseconds = minutes * 60 * 1000;
 
@@ -577,11 +582,15 @@ const App: React.FC = () => {
         workerRef.current.onmessage = async (e) => {
             if (e.data.type === 'tick') {
                 const timerTask = timerTaskRef.current || currentTaskRef.current;
+                if (checkinsLeftRef.current !== null) checkinsLeftRef.current -= 1;
 
-                if (timerTypeRef.current === 'one-time') {
+                if (timerTypeRef.current === 'one-time' || checkinsLeftRef.current === 0) {
+                    // Last check-in: one-time reminders fire once, sessions end when their time is up.
+                    workerRef.current?.postMessage({ action: 'stop' });
                     setActiveTimer(null);
                     timerTypeRef.current = null;
                     timerTaskRef.current = '';
+                    checkinsLeftRef.current = null;
                 } else if (timerTypeRef.current === 'recurring') {
                     // The worker interval keeps running; move the UI deadline to
                     // the next interval as soon as a check-in is triggered.
@@ -806,7 +815,7 @@ function formatTaskForCheckin(task: string): string {
             if (user) {
                 void dbService.saveMessage(user.uid, sessionId, msg);
             }
-            startRecurringCheckin(reminder.minutes, fallbackTask);
+            startRecurringCheckin(reminder.minutes, fallbackTask, reminder.sessionMinutes);
         }
     }, [setOneTimeReminder, startRecurringCheckin, user, sessionId]);
 
