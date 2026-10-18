@@ -1,6 +1,4 @@
 import { generateText, smoothStream, streamText, type LanguageModel, tool } from 'ai';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import type { AIProvider, ChatMessage } from '../types';
 
@@ -410,14 +408,16 @@ export const hasApiKey = (): boolean => {
     }
 };
 
-// Get the appropriate model for each provider
-const getModel = (provider: AIProvider, apiKey: string): LanguageModel => {
+// Get the appropriate model for each provider. SDKs load on first use to keep them out of the startup bundle.
+const getModel = async (provider: AIProvider, apiKey: string): Promise<LanguageModel> => {
     switch (provider) {
         case 'gemini': {
+            const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
             const google = createGoogleGenerativeAI({ apiKey });
             return google('gemini-3-flash-preview');
         }
         case 'openai': {
+            const { createOpenAI } = await import('@ai-sdk/openai');
             const openai = createOpenAI({ apiKey });
             return openai.chat('gpt-4o-mini');
         }
@@ -427,6 +427,7 @@ const getModel = (provider: AIProvider, apiKey: string): LanguageModel => {
                 typeof window !== 'undefined' && window.location?.origin
                     ? window.location.origin
                     : 'http://localhost';
+            const { createOpenAI } = await import('@ai-sdk/openai');
             const openrouter = createOpenAI({
                 apiKey,
                 baseURL: 'https://openrouter.ai/api/v1',
@@ -441,6 +442,7 @@ const getModel = (provider: AIProvider, apiKey: string): LanguageModel => {
         }
         case 'groq': {
             // Use .chat() for Groq (uses /chat/completions endpoint)
+            const { createOpenAI } = await import('@ai-sdk/openai');
             const groq = createOpenAI({
                 apiKey,
                 baseURL: 'https://api.groq.com/openai/v1',
@@ -557,7 +559,7 @@ export const streamReply = async (
     const { provider, apiKey } = getConfig();
 
     const result = streamText({
-        model: getModel(provider, apiKey),
+        model: await getModel(provider, apiKey),
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
         system: buildSystemPrompt(context),
         messages: history,
@@ -582,7 +584,7 @@ export const generateCheckinMessage = async (task: string): Promise<string> => {
 
     try {
         const { provider, apiKey } = getConfig();
-        const model = getModel(provider, apiKey);
+        const model = await getModel(provider, apiKey);
 
         const result = await generateText({
             model,
