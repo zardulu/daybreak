@@ -127,7 +127,7 @@ const App: React.FC = () => {
     const checkinsLeftRef = useRef<number | null>(null); // Recurring check-ins left in the session; null = no end
 
     // Hold the midnight rollover while a timer is running so it can't wipe a live session
-    const { sessionId, isNewSession, displayDate, sessionLoading } = useDailySession(user, handleSessionChange, activeTimer !== null);
+    const { sessionId, displayDate, sessionLoading } = useDailySession(user, handleSessionChange, activeTimer !== null);
     const sessionIdRef = useRef(sessionId);
     useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 

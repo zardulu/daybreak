@@ -54,8 +54,6 @@ export const formatSessionDate = (dateStr: string): string => {
 interface UseDailySessionResult {
   /** Current session ID, e.g. "session-2026-06-22" */
   sessionId: string;
-  /** Whether a brand-new session was just created (first load of the day) */
-  isNewSession: boolean;
   /** Today's date formatted for display, e.g. "Monday, June 22" */
   displayDate: string;
   /** Whether the session is still being initialized */
@@ -80,7 +78,6 @@ export const useDailySession = (
   deferRotation = false
 ): UseDailySessionResult => {
   const [sessionId, setSessionId] = useState<string>(getTodaySessionId());
-  const [isNewSession, setIsNewSession] = useState<boolean>(false);
   const [sessionLoading, setSessionLoading] = useState<boolean>(true);
   const midnightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSessionChangeRef = useRef(onSessionChange);
@@ -103,7 +100,6 @@ export const useDailySession = (
     if (!user) {
       // No user — just use today's session ID locally, no Firestore work
       setSessionId(getTodaySessionId());
-      setIsNewSession(false);
       setSessionLoading(false);
       return;
     }
@@ -123,7 +119,6 @@ export const useDailySession = (
           // Session already exists — just load it
           if (!cancelled) {
             setSessionId(currentSessionId);
-            setIsNewSession(false);
           }
         } else {
           // 2. No session for today — try migration first
@@ -136,7 +131,6 @@ export const useDailySession = (
 
           if (!cancelled) {
             setSessionId(currentSessionId);
-            setIsNewSession(true);
           }
         }
       } catch (error) {
@@ -144,7 +138,6 @@ export const useDailySession = (
         // Fall back to using today's session ID even if Firestore fails
         if (!cancelled) {
           setSessionId(currentSessionId);
-          setIsNewSession(false);
         }
       } finally {
         if (!cancelled) {
@@ -172,7 +165,6 @@ export const useDailySession = (
       rotationPending = false;
 
       setSessionId(newSessionId);
-      setIsNewSession(true);
 
       // Create the new session in Firestore
       if (user) {
@@ -222,5 +214,5 @@ export const useDailySession = (
     };
   }, [user]);
 
-  return { sessionId, isNewSession, displayDate, sessionLoading };
+  return { sessionId, displayDate, sessionLoading };
 };

@@ -14,25 +14,6 @@ export interface SessionMeta {
   task?: string | null;
 }
 
-// Helper to ensure Firebase is active
-const checkFirebase = () => {
-  if (!isFirebaseConfigured || !db) {
-    throw new Error('Firebase is not configured.');
-  }
-};
-
-/**
- * Upsert user profile on sign in
- */
-export const syncUserProfile = async (uid: string, profile: { displayName: string | null; email: string | null; photoURL: string | null }) => {
-  if (!isFirebaseConfigured || !db) return;
-  const userRef = doc(db, 'users', uid);
-  await setDoc(userRef, {
-    ...profile,
-    updatedAt: Date.now()
-  }, { merge: true });
-};
-
 /**
  * Settings Sync (not session-scoped — settings persist across sessions)
  */
@@ -402,22 +383,5 @@ export const markScheduledTasksConsumed = async (uid: string, taskIds: string[])
     const taskRef = doc(db, 'users', uid, 'scheduledTasks', taskId);
     batch.update(taskRef, { consumed: true });
   }
-  await batch.commit();
-};
-
-/**
- * Clear user data on sign out (optional helper, usually we just reset client memory,
- * but this is here if needed for resetting database state)
- */
-export const clearUserDatabaseData = async (uid: string) => {
-  if (!isFirebaseConfigured || !db) return;
-  const batch = writeBatch(db);
-
-  // Note: Firestore doesn't support recursive collection deletion in client SDK,
-  // but we can delete the core state documents.
-  // Settings are not session-scoped, so we delete them at user level.
-  const settingsRef = doc(db, 'users', uid, 'settings', 'ai');
-  batch.delete(settingsRef);
-
   await batch.commit();
 };
