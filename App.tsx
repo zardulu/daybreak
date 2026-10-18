@@ -3,7 +3,7 @@ import InitialTaskInput from './components/InitialTaskInput';
 import ChatInterface from './components/ChatInterface';
 import FocusShell from './components/FocusShell';
 import { ChatMessage, SessionTask, AIProvider, ScheduledTask } from './types';
-import { generateCheckinMessage, hasApiKey, ReminderConfig, TaskUpdate, streamReply, toChatHistory, SessionContext } from './services/aiService';
+import { generateCheckinMessage, hasApiKey, ReminderConfig, TaskUpdate, streamReply, toChatHistory, SessionContext, ChatTurn } from './services/aiService';
 import { useAuth } from './contexts/AuthContext';
 import * as dbService from './services/dbService';
 import { useDailySession, getTodayDateString } from './hooks/useDailySession';
@@ -37,7 +37,6 @@ interface ActiveTimer {
 interface PendingTimerRequest {
     reminder: ReminderConfig;
     fallbackTask: string;
-    messageMeta: Partial<ChatMessage>;
     currentTimer: {
         type: ActiveTimer['type'];
         task: string;
@@ -56,8 +55,6 @@ const createChatMessageId = () => {
     const randomPart = Math.random().toString(36).slice(2, 8);
     return `msg-${Date.now()}-${randomPart}`;
 };
-
-const waitForActionStatus = () => new Promise(resolve => setTimeout(resolve, 300));
 
 const resolveCurrentTaskTitle = (taskUpdate: TaskUpdate | null, fallbackTask: string) => {
     const explicitCurrent = taskUpdate?.currentTaskTitle?.trim();
@@ -256,32 +253,19 @@ const App: React.FC = () => {
         };
     };
 
-    const getTaskActionStatusText = (taskUpdateResult: TaskUpdateResult, reminder: ReminderConfig | null) => {
+    const getTaskActionStatusText = (taskUpdateResult: TaskUpdateResult, timerStarted: boolean) => {
         const actions: string[] = [];
 
         if (taskUpdateResult.shouldShowTaskList) {
             actions.push(taskUpdateResult.tasks.length === 1 ? 'Added task to task list' : 'Added tasks to task list');
         }
 
-        if (reminder) {
+        if (timerStarted) {
             actions.push('Set timer');
         }
 
         return actions.join(' and ');
     };
-
-    const finishTaskActionStatus = useCallback(async (messageId: string, taskListMeta: Partial<ChatMessage>) => {
-        await waitForActionStatus();
-        setMessages(prev => prev.map(message => {
-            if (message.id !== messageId) return message;
-
-            return {
-                ...message,
-                showTaskActionStatus: true,
-                ...taskListMeta,
-            };
-        }));
-    }, []);
 
     useEffect(() => {
         // Load saved provider and keys
@@ -508,58 +492,21 @@ const App: React.FC = () => {
         }
     }, [pushToast]);
 
-    // One-time reminder - using Web Worker for reliable background execution
-    const setOneTimeReminder = useCallback((minutes: number, fallbackTask: string, taskListMeta: Partial<ChatMessage> = {}) => {
+    // Start a one-time or recurring timer - using Web Worker for reliable background execution
+    const startTimer = useCallback((reminder: ReminderConfig, fallbackTask: string) => {
         // Store task for callback
         currentTaskRef.current = fallbackTask;
         timerTaskRef.current = fallbackTask;
-        timerTypeRef.current = 'one-time';
-        checkinsLeftRef.current = null;
-
-        const milliseconds = minutes * 60 * 1000;
-        const timeDisplay = minutes >= 1 ? `${minutes} minute(s)` : `${Math.round(minutes * 60)} seconds`;
-
-        setActiveTimer({
-            type: 'one-time',
-            task: fallbackTask,
-            durationMs: milliseconds,
-            endAt: Date.now() + milliseconds,
-        });
-
-        const notifStatus = Notification.permission === 'granted'
-            ? ''
-            : ' (⚠️ Enable notifications in your browser for alerts!)';
-        const msgId = createChatMessageId();
-        const msg: ChatMessage = {
-            id: msgId,
-            sender: 'ai',
-            text: `⏰ Got it! I'll remind you in ${timeDisplay}.${notifStatus}`,
-            ...taskListMeta,
-        };
-        setMessages(prev => [...prev, msg]);
-        if (user) {
-            void dbService.saveMessage(user.uid, sessionId, msg);
-        }
-
-        // Start worker timer
-        if (workerRef.current) {
-            workerRef.current.postMessage({ action: 'start', milliseconds, type: 'one-time' });
-        }
-    }, [user, sessionId]);
-
-    // Recurring check-in - using Web Worker for reliable background execution
-    const startRecurringCheckin = useCallback((minutes: number, fallbackTask: string, sessionMinutes?: number) => {
-        // Store task for callback
-        currentTaskRef.current = fallbackTask;
-        timerTaskRef.current = fallbackTask;
-        timerTypeRef.current = 'recurring';
+        timerTypeRef.current = reminder.type;
         // Epsilon keeps float division (e.g. 0.3 / 0.1) from dropping the last check-in.
-        checkinsLeftRef.current = sessionMinutes ? Math.floor(sessionMinutes / minutes + 1e-6) : null;
+        checkinsLeftRef.current = reminder.type === 'recurring' && reminder.sessionMinutes
+            ? Math.floor(reminder.sessionMinutes / reminder.minutes + 1e-6)
+            : null;
 
-        const milliseconds = minutes * 60 * 1000;
+        const milliseconds = reminder.minutes * 60 * 1000;
 
         setActiveTimer({
-            type: 'recurring',
+            type: reminder.type,
             task: fallbackTask,
             durationMs: milliseconds,
             endAt: Date.now() + milliseconds,
@@ -567,7 +514,7 @@ const App: React.FC = () => {
 
         // Start worker timer
         if (workerRef.current) {
-            workerRef.current.postMessage({ action: 'start', milliseconds, type: 'recurring' });
+            workerRef.current.postMessage({ action: 'start', milliseconds, type: reminder.type });
         }
     }, []);
 
@@ -610,217 +557,10 @@ const App: React.FC = () => {
         };
     }, [sendCheckin]);
 
-function formatTaskForCheckin(task: string): string {
-    if (!task) return '';
-    let cleaned = task.trim();
-    if (!cleaned) return '';
-
-    // Remove any surrounding quotes or punctuation
-    cleaned = cleaned.replace(/^["'`]+|["'`]+$/g, '').trim();
-
-    // Strip leading conversational phrases
-    cleaned = cleaned.replace(/^(?:i\s+need\s+to|i\s+have\s+to|i\s+want\s+to|need\s+to|want\s+to|to)\s+/i, '');
-
-    const words = cleaned.split(/\s+/);
-    if (words.length === 0 || !words[0]) return '';
-
-    const firstWord = words[0];
-    const restOfWords = words.slice(1).join(' ');
-
-    // Convert pronouns in rest of words
-    const rephrasedRest = restOfWords
-        ? restOfWords
-            .replace(/\bmy\b/gi, 'your')
-            .replace(/\bmyself\b/gi, 'yourself')
-            .replace(/\bour\b/gi, 'your')
-            .replace(/\bourselves\b/gi, 'yourselves')
-            .replace(/\bme\b/gi, 'you')
-        : '';
-
-    const verbToGerund: Record<string, string> = {
-        send: 'sending',
-        write: 'writing',
-        read: 'reading',
-        study: 'studying',
-        clean: 'cleaning',
-        do: 'doing',
-        make: 'making',
-        take: 'taking',
-        finish: 'finishing',
-        complete: 'completing',
-        fix: 'fixing',
-        review: 'reviewing',
-        work: 'working',
-        prepare: 'preparing',
-        code: 'coding',
-        build: 'building',
-        draft: 'drafting',
-        organize: 'organizing',
-        plan: 'planning',
-        practice: 'practicing',
-        check: 'checking',
-        update: 'updating',
-        edit: 'editing',
-        create: 'creating',
-        research: 'researching',
-        solve: 'solving',
-        watch: 'watching',
-        listen: 'listening',
-        run: 'running',
-        learn: 'learning',
-        debug: 'debugging',
-        refactor: 'refactoring',
-        set: 'setting',
-        start: 'starting',
-        tidy: 'tidying',
-        wash: 'washing',
-        cook: 'cooking',
-        exercise: 'exercising',
-        walk: 'walking',
-        buy: 'buying',
-        call: 'calling',
-        email: 'emailing',
-        message: 'messaging',
-        submit: 'submitting',
-        fill: 'filling',
-        grade: 'grading',
-        revise: 'revising',
-        draw: 'drawing',
-        paint: 'painting',
-        design: 'designing',
-        test: 'testing',
-        implement: 'implementing',
-        deploy: 'deploying',
-        format: 'formatting',
-        generate: 'generating',
-        summarize: 'summarizing',
-        memorize: 'memorizing',
-        rehearse: 'rehearsing',
-        pack: 'packing',
-        sort: 'sorting',
-        file: 'filing',
-        clear: 'clearing',
-        record: 'recording',
-        print: 'printing',
-        scan: 'scanning',
-        schedule: 'scheduling',
-        arrange: 'arranging',
-        brainstorm: 'brainstorming',
-        analyze: 'analyzing',
-        inspect: 'inspecting',
-        examine: 'examining',
-        apply: 'applying',
-        order: 'ordering',
-        shop: 'shopping',
-        browse: 'browsing',
-        search: 'searching',
-        type: 'typing',
-        calculate: 'calculating',
-        translate: 'translating',
-        convert: 'converting',
-        optimize: 'optimizing',
-        configure: 'configuring',
-        install: 'installing',
-        setup: 'setting up',
-        sync: 'syncing',
-        push: 'pushing',
-        pull: 'pulling',
-        commit: 'committing',
-        merge: 'merging',
-        post: 'posting',
-        publish: 'publishing',
-        tweet: 'tweeting',
-        upload: 'uploading',
-        download: 'downloading',
-        backup: 'backing up',
-        restore: 'restoring',
-        eat: 'eating',
-        drink: 'drinking',
-        get: 'getting',
-        give: 'giving',
-        find: 'finding',
-        choose: 'choosing',
-        pick: 'picking',
-        answer: 'answering',
-        respond: 'responding',
-        tackle: 'tackling',
-        focus: 'focusing',
-        outline: 'outlining',
-        compose: 'composing',
-        compile: 'compiling',
-        wrap: 'wrapping',
-        cut: 'cutting',
-        put: 'putting',
-        drop: 'dropping',
-        ship: 'shipping',
-        deliver: 'delivering',
-        pitch: 'pitching',
-        sell: 'selling',
-        pay: 'paying',
-        audit: 'auditing',
-        track: 'tracking',
-        train: 'training',
-        teach: 'teaching',
-        log: 'logging',
-        sign: 'signing',
-        proofread: 'proofreading',
-        summarise: 'summarising',
-        analyse: 'analysing',
-        organise: 'organising',
-        practise: 'practising',
-        memorise: 'memorising',
-        optimise: 'optimising',
-    };
-
-    const lowerFirst = firstWord.toLowerCase();
-
-    let gerund = '';
-    if (lowerFirst.endsWith('ing')) {
-        gerund = lowerFirst;
-    } else if (verbToGerund[lowerFirst]) {
-        gerund = verbToGerund[lowerFirst];
-    } else if (lowerFirst.endsWith('e') && !lowerFirst.endsWith('ee') && !lowerFirst.endsWith('oe') && !lowerFirst.endsWith('ye')) {
-        gerund = lowerFirst.slice(0, -1) + 'ing';
-    } else if (lowerFirst.endsWith('ie')) {
-        gerund = lowerFirst.slice(0, -2) + 'ying';
-    }
-
-    if (gerund) {
-        return rephrasedRest ? `${gerund} ${rephrasedRest}` : gerund;
-    }
-
-    const rephrasedFirst = /^[A-Z]{2,}$/.test(firstWord) ? firstWord : firstWord.toLowerCase();
-    return rephrasedRest ? `${rephrasedFirst} ${rephrasedRest}` : rephrasedFirst;
-}
-
-    const startConfiguredReminder = useCallback((reminder: ReminderConfig, fallbackTask: string, messageMeta: Partial<ChatMessage> = {}) => {
-        if (reminder.type === 'one-time') {
-            setOneTimeReminder(reminder.minutes, fallbackTask, messageMeta);
-        } else {
-            // Add a message for recurring check-ins
-            const msgId = createChatMessageId();
-            const rephrasedTask = formatTaskForCheckin(fallbackTask);
-            const taskContext = rephrasedTask
-                ? ` with ${rephrasedTask}`
-                : '';
-            const msg: ChatMessage = {
-                id: msgId,
-                sender: 'ai',
-                text: `✨ I'll keep checking in on your progress${taskContext}! Let's do this!`,
-                ...messageMeta,
-            };
-            setMessages(prev => [...prev, msg]);
-            if (user) {
-                void dbService.saveMessage(user.uid, sessionId, msg);
-            }
-            startRecurringCheckin(reminder.minutes, fallbackTask, reminder.sessionMinutes);
-        }
-    }, [setOneTimeReminder, startRecurringCheckin, user, sessionId]);
-
-    // Handle reminder configuration from AI tool calls.
-    const handleReminderConfig = useCallback((reminder: ReminderConfig | null, fallbackTask: string, messageMeta: Partial<ChatMessage> = {}) => {
+    // Handle reminder configuration from AI tool calls. Returns whether a timer started right away.
+    const handleReminderConfig = useCallback((reminder: ReminderConfig | null, fallbackTask: string): boolean => {
         if (!reminder) {
-            return;
+            return false;
         }
 
         // Check browser API directly instead of React state (which can be stale)
@@ -828,33 +568,33 @@ function formatTaskForCheckin(task: string): string {
 
         if (currentPermission !== 'granted') {
             pushToast('Enable notifications in your browser to get check-in reminders!', 'warning');
-            return;
+            return false;
         }
 
         if (activeTimer) {
             setPendingTimerRequest({
                 reminder,
                 fallbackTask,
-                messageMeta,
                 currentTimer: {
                     type: activeTimer.type,
                     task: activeTimer.task,
                     remainingSeconds: timerRemainingSeconds ?? 0,
                 },
             });
-            return;
+            return false;
         }
 
-        startConfiguredReminder(reminder, fallbackTask, messageMeta);
-    }, [activeTimer, pushToast, startConfiguredReminder, timerRemainingSeconds]);
+        startTimer(reminder, fallbackTask);
+        return true;
+    }, [activeTimer, pushToast, startTimer, timerRemainingSeconds]);
 
     const confirmPendingTimerReplacement = useCallback(() => {
         if (!pendingTimerRequest) return;
 
-        const { reminder, fallbackTask, messageMeta } = pendingTimerRequest;
+        const { reminder, fallbackTask } = pendingTimerRequest;
         setPendingTimerRequest(null);
-        startConfiguredReminder(reminder, fallbackTask, messageMeta);
-    }, [pendingTimerRequest, startConfiguredReminder]);
+        startTimer(reminder, fallbackTask);
+    }, [pendingTimerRequest, startTimer]);
 
     const keepCurrentTimer = useCallback(() => {
         setPendingTimerRequest(null);
@@ -874,48 +614,30 @@ function formatTaskForCheckin(task: string): string {
         return false;
     };
 
-    const handleTaskSubmit = async (newTask: string) => {
-        if (!newTask.trim() || !ensureApiKey()) return;
-        setTask(newTask);
-
-        // Immediately show the user's message before waiting for AI response
-        const userMsgId = createChatMessageId();
-        const userMessage: ChatMessage = { id: userMsgId, sender: 'user', text: newTask };
-        setMessages([userMessage]);
-        if (user) {
-            void dbService.saveMessage(user.uid, sessionId, userMessage);
-            void dbService.saveChatState(user.uid, sessionId, { task: newTask, currentTaskId: null });
-        }
+    // Stream the fairy's reply, then record tasks and start any timer it asked for.
+    const sendToFairy = async (userText: string, history: ChatTurn[]) => {
         setIsLoading(true);
         setStreamingText('');
         setStreamingComplete(false);
 
         try {
-            // Stream text with callback for real-time updates
-            const onChunk = (text: string) => {
-                setStreamingText(text);
-            };
-            
-            const { text, reminder, taskUpdate } = await streamReply([{ role: 'user', content: newTask }], sessionContext, onChunk);
+            const { text, reminder, taskUpdate } = await streamReply(history, sessionContext, setStreamingText);
 
             // Mark streaming as complete (keeps showing last text until we add message)
             setStreamingComplete(true);
-            
-            const taskUpdateResult = applyTaskUpdate(taskUpdate, newTask, Boolean(reminder));
-            const taskListMeta = getTaskListMessageMeta(taskUpdateResult);
-            const actionStatusText = getTaskActionStatusText(taskUpdateResult, reminder);
-            const shouldShowTaskAction = actionStatusText.length > 0;
-            const actionMessageId = createChatMessageId();
 
-            // Now add the final message
-            const aiMessageId = reminder && shouldShowTaskAction ? createChatMessageId() : actionMessageId;
+            const taskUpdateResult = applyTaskUpdate(taskUpdate, userText, Boolean(reminder));
+            // Let AI decide the reminder configuration via tool calling
+            const timerStarted = handleReminderConfig(reminder, taskUpdateResult.currentTitle || currentTaskTitle || userText);
+            const actionStatusText = getTaskActionStatusText(taskUpdateResult, timerStarted);
+
+            // The reply carries its status line and task list so they are saved together.
             const aiMessage: ChatMessage = {
-                id: aiMessageId,
+                id: createChatMessageId(),
                 sender: 'ai',
                 text,
-                showTaskActionStatus: !reminder && shouldShowTaskAction,
-                taskActionStatusText: !reminder && shouldShowTaskAction ? actionStatusText : undefined,
-                ...(!reminder && !shouldShowTaskAction ? taskListMeta : {}),
+                ...(actionStatusText ? { showTaskActionStatus: true, taskActionStatusText: actionStatusText } : {}),
+                ...getTaskListMessageMeta(taskUpdateResult),
             };
             setMessages(prev => [...prev, aiMessage]);
             if (user) {
@@ -923,19 +645,6 @@ function formatTaskForCheckin(task: string): string {
             }
             setStreamingText('');
             setStreamingComplete(false);
-
-            // Let AI decide the reminder configuration via tool calling
-            handleReminderConfig(
-                reminder,
-                taskUpdateResult.currentTitle || newTask,
-                shouldShowTaskAction ? { id: actionMessageId, showTaskActionStatus: true, taskActionStatusText: actionStatusText } : taskListMeta
-            );
-            setIsLoading(false);
-
-            if (shouldShowTaskAction) {
-                await finishTaskActionStatus(actionMessageId, taskListMeta);
-            }
-
         } catch {
             pushToast("Couldn't reach your AI provider. Check your API key in Settings and try again.", 'error');
         } finally {
@@ -943,70 +652,31 @@ function formatTaskForCheckin(task: string): string {
         }
     };
 
+    const handleTaskSubmit = async (newTask: string) => {
+        if (!newTask.trim() || !ensureApiKey()) return;
+        setTask(newTask);
+
+        // Immediately show the user's message before waiting for AI response
+        const userMessage: ChatMessage = { id: createChatMessageId(), sender: 'user', text: newTask };
+        setMessages([userMessage]);
+        if (user) {
+            void dbService.saveMessage(user.uid, sessionId, userMessage);
+            void dbService.saveChatState(user.uid, sessionId, { task: newTask, currentTaskId: null });
+        }
+
+        await sendToFairy(newTask, [{ role: 'user', content: newTask }]);
+    };
+
     const handleSendMessage = async (userMessage: string) => {
         if (!userMessage.trim() || !task || !ensureApiKey()) return;
 
-        const userMsgId = createChatMessageId();
-        const userMsg: ChatMessage = { id: userMsgId, sender: 'user', text: userMessage };
+        const userMsg: ChatMessage = { id: createChatMessageId(), sender: 'user', text: userMessage };
         setMessages(prev => [...prev, userMsg]);
         if (user) {
             void dbService.saveMessage(user.uid, sessionId, userMsg);
         }
-        setIsLoading(true);
-        setStreamingText('');
-        setStreamingComplete(false);
 
-        try {
-            // Stream text with callback for real-time updates
-            const onChunk = (text: string) => {
-                setStreamingText(text);
-            };
-            
-            const { text, reminder, taskUpdate } = await streamReply(toChatHistory([...messages, userMsg]), sessionContext, onChunk);
-            
-            // Mark streaming as complete (keeps showing last text until we add message)
-            setStreamingComplete(true);
-            
-            const taskUpdateResult = applyTaskUpdate(taskUpdate, userMessage, Boolean(reminder));
-            const taskListMeta = getTaskListMessageMeta(taskUpdateResult);
-            const actionStatusText = getTaskActionStatusText(taskUpdateResult, reminder);
-            const shouldShowTaskAction = actionStatusText.length > 0;
-            const actionMessageId = createChatMessageId();
-
-            // Now add the final message
-            const aiMessageId = reminder && shouldShowTaskAction ? createChatMessageId() : actionMessageId;
-            const aiMsg: ChatMessage = {
-                id: aiMessageId,
-                sender: 'ai',
-                text,
-                showTaskActionStatus: !reminder && shouldShowTaskAction,
-                taskActionStatusText: !reminder && shouldShowTaskAction ? actionStatusText : undefined,
-                ...(!reminder && !shouldShowTaskAction ? taskListMeta : {}),
-            };
-            setMessages(prev => [...prev, aiMsg]);
-            if (user) {
-                void dbService.saveMessage(user.uid, sessionId, aiMsg);
-            }
-            setStreamingText('');
-            setStreamingComplete(false);
-
-            // Let AI decide the reminder configuration via tool calling
-            handleReminderConfig(
-                reminder,
-                taskUpdateResult.currentTitle || currentTaskTitle || task,
-                shouldShowTaskAction ? { id: actionMessageId, showTaskActionStatus: true, taskActionStatusText: actionStatusText } : taskListMeta
-            );
-            setIsLoading(false);
-
-            if (shouldShowTaskAction) {
-                await finishTaskActionStatus(actionMessageId, taskListMeta);
-            }
-
-        } catch {
-            pushToast("I'm having trouble responding right now. Let's try again in a moment.", 'error');
-        } finally {
-            setIsLoading(false);
-        }
+        await sendToFairy(userMessage, toChatHistory([...messages, userMsg]));
     };
 
     const currentProviderHasKey = apiKeys[selectedProvider]?.trim() !== '';
