@@ -1,8 +1,8 @@
-import { generateText, streamText, LanguageModel, tool } from 'ai';
+import { generateText, streamText, type LanguageModel, tool } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
-import { AIProvider } from '../types';
+import type { AIProvider, ChatMessage } from '../types';
 
 // Streaming callback type
 export type StreamCallback = (chunk: string) => void;
@@ -12,8 +12,8 @@ interface AIConfig {
     apiKey: string;
 }
 
-interface ChatMessage {
-    role: 'user' | 'assistant' | 'system';
+export interface ChatTurn {
+    role: 'user' | 'assistant';
     content: string;
 }
 
@@ -21,6 +21,8 @@ interface ChatMessage {
 export interface ReminderConfig {
     type: 'one-time' | 'recurring';
     minutes: number;
+    /** Total session length; recurring check-ins stop once it is over. */
+    sessionMinutes?: number;
     reason: string;
 }
 
@@ -41,10 +43,6 @@ export interface AIResponse {
     taskUpdate: TaskUpdate | null;
 }
 
-/** User-facing message when no API key is saved. Shown in chat and check-in errors. */
-export const NO_API_KEY_MESSAGE =
-    "You need an API key to use the app. Go to Settings, choose your AI provider, and paste your API key there.";
-
 /**
  * Cap completion length so providers (especially OpenRouter) do not reserve huge max_tokens
  * budgets against small credit balances. Focus Fairy replies are short; tool JSON is small.
@@ -54,7 +52,7 @@ const CHECKIN_MAX_OUTPUT_TOKENS = 256;
 
 /**
  * Streaming can yield empty text when the model calls setReminder without emitting assistant text.
- * Non-streaming callAI already falls back; this keeps chat from showing the empty-state placeholder.
+ * This keeps chat from showing the empty-state placeholder.
  */
 function ensureStreamedAssistantText(
     streamed: string,
@@ -69,9 +67,12 @@ function ensureStreamedAssistantText(
     if (reminder && taskUpdate && taskUpdate.tasks.length > 0) {
         const taskName = taskUpdate.currentTaskTitle || taskUpdate.tasks[0].title;
         const timeDisplay = reminder.minutes >= 1
-            ? `every ${reminder.minutes} min`
-            : `every ${Math.round(reminder.minutes * 60)} sec`;
-        return `Alright, let's lock in on "${taskName}"! I'll check in ${timeDisplay} to keep you on track ✨`;
+            ? `${reminder.minutes} min`
+            : `${Math.round(reminder.minutes * 60)} sec`;
+        const plan = reminder.type === 'one-time'
+            ? `I'll remind you in ${timeDisplay}`
+            : `I'll check in every ${timeDisplay} to keep you on track`;
+        return `Alright, let's lock in on "${taskName}"! ${plan} ✨`;
     }
     if (reminder) {
         return "Let's do this! I'll check in to keep you on track. You've got this ✨";
@@ -134,7 +135,7 @@ async function extractAssistantTextFromResponseMessages(result: {
 }
 
 /** AI SDK v6 static tool calls use `input`, not `args`. */
-function extractReminderFromStaticToolCalls(
+export function extractReminderFromStaticToolCalls(
     staticCalls: Array<{ toolName: string; input?: unknown }>
 ): ReminderConfig | null {
     for (const tc of staticCalls) {
@@ -142,6 +143,7 @@ function extractReminderFromStaticToolCalls(
         const input = tc.input as {
             type: 'one-time' | 'recurring';
             minutes: number;
+            sessionMinutes?: unknown;
             reason: string;
         };
         if (
@@ -149,9 +151,13 @@ function extractReminderFromStaticToolCalls(
             typeof input.minutes === 'number' &&
             typeof input.reason === 'string'
         ) {
+            const sessionMinutes = typeof input.sessionMinutes === 'number' && input.sessionMinutes > 0
+                ? input.sessionMinutes
+                : undefined;
             return {
                 type: input.type,
                 minutes: input.minutes,
+                sessionMinutes,
                 reason: input.reason,
             };
         }
@@ -205,24 +211,67 @@ function extractTaskUpdateFromStaticToolCalls(
     return taskUpdate;
 }
 
-/** Default reminder to auto-inject when the AI recorded tasks but forgot to set a reminder. */
-const DEFAULT_AUTO_REMINDER: ReminderConfig = {
-    type: 'recurring',
-    minutes: 25,
-    reason: 'Auto-set: AI recorded tasks but did not set a reminder',
+const DURATION = String.raw`(\d+(?:\.\d+)?|an?)?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b`;
+// "for 2 hours", "for the next hour", "over the next 30 min", or a reply that is only a duration
+// ("about 45 minutes", answering "how long?"). Not "in 2 hours", which reads as a reminder time.
+const SESSION_PHRASES = [
+    new RegExp(String.raw`\b(?:for|(?:in|over|during)\s+the\s+next)\s+(?:the\s+next\s+)?${DURATION}`, 'i'),
+    new RegExp(String.raw`^\s*(?:about|around|like|maybe|roughly)?\s*${DURATION}\W*$`, 'i'),
+];
+const INTERVAL_PHRASES = [new RegExp(String.raw`\bevery\s+${DURATION}`, 'i')];
+// "in 2 minutes", "after an hour", "in exactly 30 min"
+const REMINDER_PHRASES = [new RegExp(String.raw`\b(?:in|after)\s+(?:exactly\s+)?${DURATION}`, 'i')];
+
+const statedMinutes = (text: string, phrases: RegExp[]): number | undefined => {
+    for (const phrase of phrases) {
+        const match = text.match(phrase);
+        if (!match) continue;
+
+        const [whole, amount, unit] = match;
+        // "the next hour" and "every hour" mean one; "for hours" doesn't name a length.
+        if (!amount && !/\b(?:next|every)\s/i.test(whole)) continue;
+
+        const count = !amount || /^an?$/i.test(amount) ? 1 : Number(amount);
+        const minutes = /^h/i.test(unit) ? count * 60 : /^s/i.test(unit) ? count / 60 : count;
+        if (minutes > 0) return minutes;
+    }
+    return undefined;
 };
 
-const normalizeReminderDuration = (
-    reminder: ReminderConfig | null,
-    explicitDurationMinutes: number | null
-): ReminderConfig | null => {
-    if (!reminder || explicitDurationMinutes === null) return reminder;
+/**
+ * Models sometimes pick their own numbers or skip setReminder entirely, so reminders also read
+ * durations the user typed. Each phrase fills only its own field: "in N" sets a one-time reminder,
+ * "every N" always sets the check-in gap, and "for N" only fills a missing session length, since
+ * it can describe other things too.
+ */
+export function applyStatedDurations(reminder: ReminderConfig | null, userText: string): ReminderConfig | null {
+    if (!reminder) return null;
+
+    if (reminder.type === 'one-time') {
+        return { ...reminder, minutes: statedMinutes(userText, REMINDER_PHRASES) ?? reminder.minutes };
+    }
+
+    const sessionMinutes = reminder.sessionMinutes ?? statedMinutes(userText, SESSION_PHRASES);
+    const minutes = statedMinutes(userText, INTERVAL_PHRASES) ?? reminder.minutes;
 
     return {
         ...reminder,
-        minutes: explicitDurationMinutes,
+        // A gap longer than the session would never check in before it ends.
+        minutes: sessionMinutes ? Math.min(minutes, sessionMinutes) : minutes,
+        sessionMinutes,
     };
-};
+}
+
+/** Reminder to auto-inject when the AI recorded tasks but forgot to set one. */
+export function autoReminder(userText: string): ReminderConfig {
+    // "remind me in 2 minutes" asks for one reminder; anything else gets recurring check-ins.
+    const asksForReminder = /\bremind\b/i.test(userText) && statedMinutes(userText, REMINDER_PHRASES) !== undefined;
+    return {
+        type: asksForReminder ? 'one-time' : 'recurring',
+        minutes: 25,
+        reason: 'Auto-set: AI recorded tasks but did not set a reminder',
+    };
+}
 
 async function streamAssistantReplyToUI(
     result: {
@@ -232,7 +281,7 @@ async function streamAssistantReplyToUI(
         staticToolCalls: PromiseLike<Array<{ toolName: string; input?: unknown }>>;
     },
     onChunk: StreamCallback,
-    explicitDurationMinutes: number | null = null
+    userText: string
 ): Promise<{ text: string; reminder: ReminderConfig | null; taskUpdate: TaskUpdate | null }> {
     let merged = await recoverAssistantTextFromStream(result);
     let fromMessages = '';
@@ -259,11 +308,10 @@ async function streamAssistantReplyToUI(
     const aiEmittedNoText = !merged.trim() && !fromMessages.trim();
     if (aiEmittedNoText && taskUpdate && taskUpdate.tasks.length > 0 && !reminder) {
         console.log('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
-        reminder = DEFAULT_AUTO_REMINDER;
+        reminder = autoReminder(userText);
     }
 
-    // Explicit user durations always take precedence over model defaults or guesses.
-    reminder = normalizeReminderDuration(reminder, explicitDurationMinutes);
+    reminder = applyStatedDurations(reminder, userText);
 
     const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate);
 
@@ -314,8 +362,8 @@ When the user mentions a task they want to work on, do NOT immediately call setR
 - If the user mentioned a deadline, include the deadline context in the reason field so check-in messages can reference urgency (e.g., "Due in 3 hours — staying on track").
 
 **FOCUS SESSION TIMING** (IMPORTANT):
-- If the user states an explicit duration, use that exact duration in the setReminder minutes field; never replace it with a default.
-- When a user mentions a duration (e.g., "for the next hour", "for 2 hours", "for 30 minutes"), set up RECURRING check-ins to keep them accountable throughout.
+- The setReminder minutes field is the gap between check-ins (recurring) or the time until the reminder (one-time). If the user says how often to check in, or exactly when to remind them, use that exact value; never replace it with a default.
+- When a user says how long they'll work (e.g., "for the next hour", "for 2 hours", "for 30 minutes"), set up RECURRING check-ins, put that total in sessionMinutes, and pick minutes from the intervals below. Never put the session length in minutes. Check-ins stop when the session ends.
 - Calculate check-in intervals based on total duration:
   - Under 30 min total: check-in every 10 minutes (recurring)
   - 30-60 min total: check-in every 15-20 minutes (recurring)
@@ -346,6 +394,16 @@ const getConfig = (): AIConfig => {
     }
 
     return { provider, apiKey };
+};
+
+/** Whether the selected provider has a saved key, read the same way requests read it. */
+export const hasApiKey = (): boolean => {
+    try {
+        getConfig();
+        return true;
+    } catch {
+        return false;
+    }
 };
 
 // Get the appropriate model for each provider
@@ -396,7 +454,10 @@ const reminderToolSchema = z.object({
         'one-time: fires once (for explicit reminders or quick tasks). recurring: repeats (for deep work/study sessions)'
     ),
     minutes: z.number().min(0.1).max(180).describe(
-        'Minutes until reminder (one-time) or between check-ins (recurring). Use exact time if user specifies one.'
+        'Minutes until reminder (one-time) or between check-ins (recurring). Use exact time if user specifies one. Not the session length.'
+    ),
+    sessionMinutes: z.number().min(0.1).max(720).optional().describe(
+        'Total session length when the user says how long they will work (e.g. "for 2 hours" = 120). Check-ins stop after it. Omit otherwise.'
     ),
     reason: z.string().describe(
         'Brief explanation of why this timing was chosen'
@@ -418,7 +479,7 @@ const setReminderTool = tool({
     description: `Set check-ins for the user's focus session.
 Use 'recurring' (default for focus sessions) to provide periodic check-ins throughout their work time - this keeps users accountable.
 Use 'one-time' ONLY when user explicitly asks for a single reminder at a specific time (e.g., "remind me in exactly 30 min").
-For focus sessions with a duration (e.g., "work for 1 hour"), ALWAYS use recurring with appropriate intervals.`,
+For focus sessions with a duration (e.g., "work for 1 hour"), ALWAYS use recurring with appropriate intervals and set sessionMinutes to the total.`,
     inputSchema: reminderToolSchema,
 });
 
@@ -428,29 +489,33 @@ Use this for task list memory only. Do not call it for greetings, vague messages
     inputSchema: taskToolSchema,
 });
 
-// Store conversation history
-let conversationHistory: ChatMessage[] = [];
-let currentTask: string | null = null;
-
-// Session state: tracks what's already been recorded so the AI doesn't re-call tools
-let recordedTaskTitles: string[] = [];
-let sessionTimerActive = false;
+export interface SessionContext {
+    tasks: string[];
+    currentTask: string | null;
+    timerActive: boolean;
+}
 
 /** Build the full system prompt, injecting session context if tasks are already recorded. */
-function buildSystemPrompt(): string {
-    if (recordedTaskTitles.length === 0) {
-        return systemInstruction;
+function buildSystemPrompt({ tasks, currentTask, timerActive }: SessionContext): string {
+    // The model has no clock; without this it guesses scheduledDate from its training data.
+    const now = new Date();
+    const prompt = `${systemInstruction}
+
+Today is ${now.toDateString()} (${now.toLocaleDateString('en-CA')}). Use this to work out scheduledDate.`;
+
+    if (tasks.length === 0) {
+        return prompt;
     }
 
-    const taskList = recordedTaskTitles.map(t => `"${t}"`).join(', ');
-    const timerNote = sessionTimerActive
-        ? 'A recurring check-in timer is already running.'
+    const taskList = tasks.map(t => `"${t}"`).join(', ');
+    const timerNote = timerActive
+        ? 'A check-in timer is already running.'
         : 'No timer is set yet.';
 
-    return `${systemInstruction}
+    return `${prompt}
 
 **ACTIVE SESSION CONTEXT** (auto-injected — do NOT repeat this to the user):
-- Tasks already recorded: ${taskList}. Current focus: "${currentTask || recordedTaskTitles[0]}".
+- Tasks already recorded: ${taskList}. Current focus: "${currentTask || tasks[0]}".
 - ${timerNote}
 - Do NOT call recordTasks again for these existing tasks. Only call recordTasks if the user mentions a COMPLETELY NEW task.
 - Do NOT call setReminder again unless the user explicitly asks to change the timer.
@@ -459,263 +524,55 @@ function buildSystemPrompt(): string {
 - If the user says they don't want to do it, gently acknowledge and ask if they want to switch tasks or take a break.`;
 }
 
-export const resetConversation = () => {
-    conversationHistory = [];
-    currentTask = null;
-    recordedTaskTitles = [];
-    sessionTimerActive = false;
-};
+/**
+ * Turn the visible chat into model history. Back-to-back messages from one side are merged
+ * (check-ins follow replies) and history starts at the first user message.
+ */
+export const toChatHistory = (messages: Pick<ChatMessage, 'sender' | 'text'>[]): ChatTurn[] => {
+    const turns: ChatTurn[] = [];
+    for (const message of messages) {
+        const role = message.sender === 'user' ? 'user' : 'assistant';
+        if (turns.length === 0 && role === 'assistant') continue;
 
-export const getCurrentTask = (): string | null => currentTask;
-
-
-// Call the AI with tool support
-const callAI = async (messages: ChatMessage[]): Promise<AIResponse> => {
-    const { provider, apiKey } = getConfig();
-    const model = getModel(provider, apiKey);
-
-    try {
-        const result = await generateText({
-            model,
-            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-            system: systemInstruction,
-            messages: messages.map(m => ({
-                role: m.role as 'user' | 'assistant',
-                content: m.content,
-            })),
-            tools: {
-                setReminder: setReminderTool,
-                recordTasks: recordTasksTool,
-            },
-        });
-
-        const toolCalls = (result.toolCalls || []) as Array<{ toolName: string; input?: unknown }>;
-        const reminder = extractReminderFromStaticToolCalls(toolCalls);
-        const taskUpdate = extractTaskUpdateFromStaticToolCalls(toolCalls);
-
-        return {
-            text: result.text || "I'm here to help you focus! What would you like to work on?",
-            reminder,
-            taskUpdate,
-        };
-    } catch (error) {
-        // Fallback: try without tools if tool calling fails
-        try {
-            const fallbackResult = await generateText({
-                model,
-                maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-                system: systemInstruction,
-                messages: messages.map(m => ({
-                    role: m.role as 'user' | 'assistant',
-                    content: m.content,
-                })),
-            });
-
-            return {
-                text: fallbackResult.text || "I'm here to help you focus!",
-                reminder: null,
-                taskUpdate: null,
-            };
-        } catch {
-            throw error;
-        }
-    }
-};
-
-export const initializeChat = () => {
-    conversationHistory = [];
-};
-
-
-
-export const getInitialResponse = async (userInput: string): Promise<AIResponse> => {
-    // Let the AI fully determine if this is a task, greeting, or off-topic message
-    conversationHistory = [{ role: 'user', content: userInput }];
-
-    try {
-        const response = await callAI(conversationHistory);
-        conversationHistory.push({ role: 'assistant', content: response.text });
-
-        // Store the AI-selected current task for generated check-ins.
-        if (response.taskUpdate?.currentTaskTitle) {
-            currentTask = response.taskUpdate.currentTaskTitle;
-        } else if (response.reminder) {
-            currentTask = userInput;
+        const last = turns[turns.length - 1];
+        if (last?.role === role) {
+            last.content += `\n\n${message.text}`;
         } else {
-            currentTask = null;
+            turns.push({ role, content: message.text });
         }
-
-        return {
-            ...response,
-            reminder: normalizeReminderDuration(response.reminder, extractTimeFromMessage(userInput)),
-        };
-    } catch (error) {
-        const isNoApiKey = error instanceof Error && error.message.includes('No API key');
-        return {
-            text: isNoApiKey ? NO_API_KEY_MESSAGE : `I'm having trouble connecting. Go to Settings (gear icon) and check your API key, then try again.`,
-            reminder: null,
-            taskUpdate: null,
-        };
     }
+    return turns;
 };
 
-export const continueChat = async (message: string): Promise<AIResponse> => {
-    conversationHistory.push({ role: 'user', content: message });
-
-    try {
-        const response = await callAI(conversationHistory);
-        conversationHistory.push({ role: 'assistant', content: response.text });
-
-        // Update currentTask if AI detected a new current task.
-        if (response.taskUpdate?.currentTaskTitle) {
-            currentTask = response.taskUpdate.currentTaskTitle;
-        } else if (response.reminder) {
-            currentTask = message;
-        }
-
-        return {
-            ...response,
-            reminder: normalizeReminderDuration(response.reminder, extractTimeFromMessage(message)),
-        };
-    } catch (error) {
-        const isNoApiKey = error instanceof Error && error.message.includes('No API key');
-        return {
-            text: isNoApiKey ? NO_API_KEY_MESSAGE : "I'm having trouble responding right now. Let's try again in a moment.",
-            reminder: null,
-            taskUpdate: null,
-        };
-    }
-};
-
-export const streamInitialResponse = async (
-    userInput: string,
+/** Stream a reply to the full chat history. The caller owns the history, so it survives reloads. */
+export const streamReply = async (
+    history: ChatTurn[],
+    context: SessionContext,
     onChunk: StreamCallback
 ): Promise<AIResponse> => {
-    // Let the AI fully determine if this is a task, greeting, or off-topic message
-    conversationHistory = [{ role: 'user', content: userInput }];
-    // Reset session state for a fresh conversation
-    recordedTaskTitles = [];
-    sessionTimerActive = false;
-
-    console.log('[FocusFairy] === streamInitialResponse ===');
-    console.log('[FocusFairy] History sent:', JSON.stringify(conversationHistory, null, 2));
-
     const { provider, apiKey } = getConfig();
-    const model = getModel(provider, apiKey);
 
     const result = streamText({
-        model,
+        model: getModel(provider, apiKey),
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-        system: buildSystemPrompt(),
-        messages: conversationHistory.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-        })),
+        system: buildSystemPrompt(context),
+        messages: history,
         tools: {
             setReminder: setReminderTool,
             recordTasks: recordTasksTool,
         },
     });
 
-    const { text: replyText, reminder, taskUpdate } = await streamAssistantReplyToUI(
-        result,
-        onChunk,
-        extractTimeFromMessage(userInput)
-    );
-
-    // Store in conversation history
-    conversationHistory.push({ role: 'assistant', content: replyText });
-
-    // Update session state from tool calls
-    if (taskUpdate?.tasks) {
-        recordedTaskTitles = taskUpdate.tasks.map(t => t.title);
-    }
-    if (reminder) {
-        sessionTimerActive = true;
-    }
-
-    // Store the AI-selected current task for generated check-ins.
-    if (taskUpdate?.currentTaskTitle) {
-        currentTask = taskUpdate.currentTaskTitle;
-    } else if (reminder) {
-        currentTask = userInput;
-    } else {
-        currentTask = null;
-    }
-
-    return { text: replyText, reminder, taskUpdate };
+    return streamAssistantReplyToUI(result, onChunk, history[history.length - 1]?.content ?? '');
 };
 
-export const streamContinueChat = async (
-    message: string,
-    onChunk: StreamCallback
-): Promise<AIResponse> => {
-    conversationHistory.push({ role: 'user', content: message });
-
-    console.log('[FocusFairy] === streamContinueChat ===');
-    console.log('[FocusFairy] Session state:', JSON.stringify({ recordedTaskTitles, sessionTimerActive, currentTask }));
-    console.log('[FocusFairy] History sent:', JSON.stringify(conversationHistory, null, 2));
-
-    const { provider, apiKey } = getConfig();
-    const model = getModel(provider, apiKey);
-
-    const dynamicPrompt = buildSystemPrompt();
-    console.log('[FocusFairy] Session context injected:', recordedTaskTitles.length > 0 ? 'YES' : 'NO');
-
-    const result = streamText({
-        model,
-        maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-        system: dynamicPrompt,
-        messages: conversationHistory.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-        })),
-        tools: {
-            setReminder: setReminderTool,
-            recordTasks: recordTasksTool,
-        },
-    });
-
-    const { text: replyText, reminder, taskUpdate } = await streamAssistantReplyToUI(
-        result,
-        onChunk,
-        extractTimeFromMessage(message)
-    );
-
-    // Store in conversation history
-    conversationHistory.push({ role: 'assistant', content: replyText });
-
-    // Update session state from tool calls
-    if (taskUpdate?.tasks) {
-        for (const t of taskUpdate.tasks) {
-            if (!recordedTaskTitles.includes(t.title)) {
-                recordedTaskTitles.push(t.title);
-            }
-        }
-    }
-    if (reminder) {
-        sessionTimerActive = true;
-    }
-
-    // Update currentTask if AI detected a new current task.
-    if (taskUpdate?.currentTaskTitle) {
-        currentTask = taskUpdate.currentTaskTitle;
-    } else if (reminder) {
-        currentTask = message;
-    }
-
-    return { text: replyText, reminder, taskUpdate };
-};
-
-export const generateCheckinMessage = async (fallbackTask: string): Promise<string> => {
-    const taskToUse = currentTask || fallbackTask;
-
+export const generateCheckinMessage = async (task: string): Promise<string> => {
     // If no real task is set, use a generic check-in
-    if (!taskToUse) {
+    if (!task) {
         return "Hey! Just checking in. How's your focus going? ✨";
     }
 
-    const prompt = `Generate a short, friendly check-in notification (under 15 words) for someone working on: "${taskToUse}". Don't use special formatting.`;
+    const prompt = `Generate a short, friendly check-in notification (under 15 words) for someone working on: "${task}". Don't use special formatting.`;
 
     try {
         const { provider, apiKey } = getConfig();
@@ -734,37 +591,4 @@ export const generateCheckinMessage = async (fallbackTask: string): Promise<stri
         }
         return `How's your progress going? Keep it up! ✨`;
     }
-};
-
-// Legacy exports for backwards compatibility (can be removed later)
-export const extractTimeFromMessage = (message: string): number | null => {
-    // The AI still decides whether a reminder should exist and whether it is
-    // one-time or recurring. This parser only makes an explicit duration
-    // authoritative when the user has stated one.
-    const MAX_INTERVAL_MINUTES = 180;
-
-    const durationPatterns = [
-        /(?:for|during|over|within|in|after)\s+(?:the\s+)?(?:next\s+)?(?:exactly\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)/i,
-        /\bnext\s+(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i,
-        /\b(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/i,
-    ];
-
-    for (const pattern of durationPatterns) {
-        const match = message.match(pattern);
-        if (match && match[1]) {
-            const amount = Number(match[1]);
-            const unit = match[2].toLowerCase();
-            const minutes = unit.startsWith('hour') || unit.startsWith('hr')
-                ? amount * 60
-                : unit.startsWith('second') || unit.startsWith('sec')
-                    ? amount / 60
-                    : amount;
-
-            if (minutes > 0) {
-                return Math.min(minutes, MAX_INTERVAL_MINUTES);
-            }
-        }
-    }
-
-    return null;
 };

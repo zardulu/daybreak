@@ -687,6 +687,12 @@ body {
   margin-bottom: 16px;
 }
 
+/* The task list fades in just after the status line above it */
+.task-list-container + .task-list-container {
+  animation-delay: 0.3s;
+  animation-fill-mode: both;
+}
+
 .task-list-panel {
   max-width: 356px;
   width: 100%;

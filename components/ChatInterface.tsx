@@ -20,8 +20,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
     // Character limit for input
     const MAX_INPUT_CHARS = 280;
 
-    // Separate user and AI messages for easier pairing
-    const userMessages = messages.filter(m => m.sender === 'user');
+    // Group messages into turns: a user message plus the AI messages after it (reply, then check-ins).
+    // AI messages before the first user message (e.g. the morning welcome) form their own turn.
+    const turns: { user: ChatMessage | null; ai: ChatMessage[] }[] = [];
+    for (const message of messages) {
+        if (message.sender === 'user') {
+            turns.push({ user: message, ai: [] });
+        } else {
+            if (turns.length === 0) turns.push({ user: null, ai: [] });
+            turns[turns.length - 1].ai.push(message);
+        }
+    }
     const aiMessages = messages.filter(m => m.sender === 'ai');
 
     // Reset view to latest when new messages arrive
@@ -48,7 +57,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
 
     // Navigate to earlier messages (scroll up = more negative offset)
     const scrollUp = () => {
-        const maxOffset = -(userMessages.length - 1);
+        const maxOffset = -(turns.length - 1);
         setViewOffset(prev => Math.max(maxOffset, prev - 1));
     };
 
@@ -57,7 +66,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
         setViewOffset(prev => Math.min(0, prev + 1));
     };
 
-    const canScrollUp = userMessages.length > 1 && viewOffset > -(userMessages.length - 1);
+    const canScrollUp = viewOffset > -(turns.length - 1);
     const canScrollDown = viewOffset < 0;
 
     const AISparkleIndicator = () => (
@@ -68,15 +77,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
         </div>
     );
 
-    // Calculate current pair index (0 = first pair, higher = later pairs)
-    // viewOffset 0 = latest pair, -1 = second to last, etc.
-    const latestPairIndex = userMessages.length - 1;
+    // Calculate current turn index (0 = first turn, higher = later turns)
+    // viewOffset 0 = latest turn, -1 = second to last, etc.
+    const latestPairIndex = turns.length - 1;
     const currentPairIndex = Math.max(0, latestPairIndex + viewOffset);
+    const currentTurn = turns[currentPairIndex];
 
-    // Get current pair to display
-    // User messages and AI messages are paired 1:1 (user[0] pairs with ai[0], etc.)
-    const hasUserMessages = userMessages.length > 0;
-    const userMessage = hasUserMessages ? userMessages[currentPairIndex] : null;
+    const hasUserMessages = turns.some(turn => turn.user);
+    const userMessage = currentTurn?.user ?? null;
 
     // For AI messages: at the latest view (offset 0), always show the most recent AI message
     // This handles check-in messages that don't have a corresponding user message
@@ -93,14 +101,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
         ? null
         : isViewingLatest
             ? aiMessages[aiMessages.length - 1] || null
-            : aiMessages[currentPairIndex] || null;
+            : currentTurn?.ai[0] || null; // Older turns show the reply itself, not later check-ins
 
     const displayedAiText = showLiveAiText
         ? streamingText
         : aiMessage?.text || "Hi! I'm here to help you stay focused ✨ Tell me what you're working on, and I'll guide you through it step by step.";
-
-    const waitingForAiResponse = hasUserMessages && userMessage && !aiMessage && !showLiveAiText;
-    const showSparkleIndicator = ((isLoading && isViewingLatest) || waitingForAiResponse) && !showLiveAiText;
 
     const showStreamParticles =
         isLoading && streamingText.length > 0 && !streamingComplete;
@@ -132,7 +137,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
                             <div className={`fairy-container animate-float flex-shrink-0${isLoading ? ' fairy-thinking' : ''}`}>
                                 <img src="/fairy.svg" alt="Focus Fairy" />
                             </div>
-                            {showSparkleIndicator ? (
+                            {waitingForLatestAiResponse ? (
                                 <div className="sparkle-loading-wrapper animate-fadeIn flex-1 min-w-0">
                                     <AISparkleIndicator />
                                 </div>
