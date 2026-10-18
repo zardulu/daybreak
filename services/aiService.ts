@@ -438,8 +438,14 @@ let sessionTimerActive = false;
 
 /** Build the full system prompt, injecting session context if tasks are already recorded. */
 function buildSystemPrompt(): string {
+    // The model has no clock; without this it guesses scheduledDate from its training data.
+    const now = new Date();
+    const prompt = `${systemInstruction}
+
+Today is ${now.toDateString()} (${now.toLocaleDateString('en-CA')}). Use this to work out scheduledDate.`;
+
     if (recordedTaskTitles.length === 0) {
-        return systemInstruction;
+        return prompt;
     }
 
     const taskList = recordedTaskTitles.map(t => `"${t}"`).join(', ');
@@ -447,7 +453,7 @@ function buildSystemPrompt(): string {
         ? 'A recurring check-in timer is already running.'
         : 'No timer is set yet.';
 
-    return `${systemInstruction}
+    return `${prompt}
 
 **ACTIVE SESSION CONTEXT** (auto-injected — do NOT repeat this to the user):
 - Tasks already recorded: ${taskList}. Current focus: "${currentTask || recordedTaskTitles[0]}".
