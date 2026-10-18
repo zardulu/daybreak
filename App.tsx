@@ -3,13 +3,11 @@ import InitialTaskInput from './components/InitialTaskInput';
 import ChatInterface from './components/ChatInterface';
 import FocusShell from './components/FocusShell';
 import { ChatMessage, SessionTask, AIProvider, ScheduledTask } from './types';
-import { generateCheckinMessage, ReminderConfig, TaskUpdate, streamReply, toChatHistory, SessionContext } from './services/aiService';
+import { generateCheckinMessage, hasApiKey, ReminderConfig, TaskUpdate, streamReply, toChatHistory, SessionContext } from './services/aiService';
 import { useAuth } from './contexts/AuthContext';
 import * as dbService from './services/dbService';
 import { useDailySession, getTodayDateString } from './hooks/useDailySession';
 import { ToastContainer, useToasts } from './components/Toasts';
-
-const DEFAULT_CHECKIN_MINUTES = 15;
 
 const PROVIDERS: { id: AIProvider; name: string }[] = [
     { id: 'gemini', name: 'Gemini' },
@@ -868,8 +866,16 @@ function formatTaskForCheckin(task: string): string {
         timerActive: Boolean(activeTimer),
     };
 
+    // Every request fails without a key, so send the user to Settings before sending anything.
+    const ensureApiKey = () => {
+        if (hasApiKey()) return true;
+        pushToast('Add an API key in Settings to get started. Free-tier keys work!', 'info');
+        setShowApiKeyModal(true);
+        return false;
+    };
+
     const handleTaskSubmit = async (newTask: string) => {
-        if (!newTask.trim()) return;
+        if (!newTask.trim() || !ensureApiKey()) return;
         setTask(newTask);
 
         // Immediately show the user's message before waiting for AI response
@@ -931,20 +937,14 @@ function formatTaskForCheckin(task: string): string {
             }
 
         } catch {
-            pushToast("To use Focus Fairy, please add your own API key in Settings. Don't worry, you can use free-tier keys!", 'error');
-
-            // Fallback: start default recurring check-in on error
-            if (Notification.permission === 'granted') {
-                applyTaskUpdate(null, newTask, true);
-                startRecurringCheckin(DEFAULT_CHECKIN_MINUTES, newTask);
-            }
+            pushToast("Couldn't reach your AI provider. Check your API key in Settings and try again.", 'error');
         } finally {
             setIsLoading(false);
         }
     };
 
     const handleSendMessage = async (userMessage: string) => {
-        if (!userMessage.trim() || !task) return;
+        if (!userMessage.trim() || !task || !ensureApiKey()) return;
 
         const userMsgId = createChatMessageId();
         const userMsg: ChatMessage = { id: userMsgId, sender: 'user', text: userMessage };

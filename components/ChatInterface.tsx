@@ -99,9 +99,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
         ? streamingText
         : aiMessage?.text || "Hi! I'm here to help you stay focused ✨ Tell me what you're working on, and I'll guide you through it step by step.";
 
-    const waitingForAiResponse = hasUserMessages && userMessage && !aiMessage && !showLiveAiText;
-    const showSparkleIndicator = ((isLoading && isViewingLatest) || waitingForAiResponse) && !showLiveAiText;
-
     const showStreamParticles =
         isLoading && streamingText.length > 0 && !streamingComplete;
     const displayedCurrentTask = currentTask || task;
@@ -132,7 +129,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, messag
                             <div className={`fairy-container animate-float flex-shrink-0${isLoading ? ' fairy-thinking' : ''}`}>
                                 <img src="/fairy.svg" alt="Focus Fairy" />
                             </div>
-                            {showSparkleIndicator ? (
+                            {waitingForLatestAiResponse ? (
                                 <div className="sparkle-loading-wrapper animate-fadeIn flex-1 min-w-0">
                                     <AISparkleIndicator />
                                 </div>

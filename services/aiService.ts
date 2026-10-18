@@ -336,6 +336,16 @@ const getConfig = (): AIConfig => {
     return { provider, apiKey };
 };
 
+/** Whether the selected provider has a saved key, read the same way requests read it. */
+export const hasApiKey = (): boolean => {
+    try {
+        getConfig();
+        return true;
+    } catch {
+        return false;
+    }
+};
+
 // Get the appropriate model for each provider
 const getModel = (provider: AIProvider, apiKey: string): LanguageModel => {
     switch (provider) {
