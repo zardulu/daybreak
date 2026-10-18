@@ -1,6 +1,6 @@
 import { generateText, smoothStream, streamText, type LanguageModel, tool } from 'ai';
 import { z } from 'zod';
-import type { AIProvider, ChatMessage } from '../types';
+import type { AIProvider, AISettings, ChatMessage } from '../types';
 
 // Streaming callback type
 export type StreamCallback = (chunk: string) => void;
@@ -386,10 +386,25 @@ When the user mentions a task they want to work on, do NOT immediately call setR
 - When you schedule future tasks, acknowledge it in your response (e.g., "I've scheduled those for Thursday! For now, what would you like to focus on?").
 - If the user ONLY mentions future tasks with no current task, do NOT set a reminder — just record the future tasks and ask what they'd like to work on now.`;
 
-const getConfig = (): AIConfig => {
-    const provider = (localStorage.getItem('ai_provider') as AIProvider) || 'gemini';
+const readKey = (provider: AIProvider) => (localStorage.getItem(`${provider}_api_key`) || '').trim();
+
+/** Provider and keys saved in this browser. Every request reads them from here. */
+export const loadLocalSettings = (): AISettings => ({
+    provider: (localStorage.getItem('ai_provider') as AIProvider) || 'gemini',
     // Trim so whitespace-only keys fail fast; @ai-sdk/openai sends Bearer <key> and an empty/space key yields a useless header.
-    const apiKey = (localStorage.getItem(`${provider}_api_key`) || '').trim();
+    apiKeys: { gemini: readKey('gemini'), openai: readKey('openai'), openrouter: readKey('openrouter'), groq: readKey('groq') },
+});
+
+export const saveLocalSettings = ({ provider, apiKeys }: AISettings) => {
+    localStorage.setItem('ai_provider', provider);
+    for (const [id, key] of Object.entries(apiKeys)) {
+        localStorage.setItem(`${id}_api_key`, (key || '').trim());
+    }
+};
+
+const getConfig = (): AIConfig => {
+    const { provider, apiKeys } = loadLocalSettings();
+    const apiKey = apiKeys[provider] ?? '';
 
     if (!apiKey) {
         throw new Error(`No API key found for ${provider}.`);
