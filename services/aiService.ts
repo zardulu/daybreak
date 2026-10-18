@@ -1,4 +1,4 @@
-import { generateText, streamText, type LanguageModel, tool } from 'ai';
+import { generateText, smoothStream, streamText, type LanguageModel, tool } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
@@ -96,11 +96,12 @@ function ensureStreamedAssistantText(
 async function recoverAssistantTextFromStream(result: {
     textStream: AsyncIterable<string>;
     text: PromiseLike<string>;
-}): Promise<string> {
+}, onChunk: StreamCallback): Promise<string> {
     let streamedText = '';
     try {
         for await (const chunk of result.textStream) {
             streamedText += chunk;
+            onChunk(streamedText);
         }
     } catch {
         /* stream may fail if the request errors */
@@ -278,7 +279,7 @@ export function autoReminder(userText: string): ReminderConfig {
     };
 }
 
-async function streamAssistantReplyToUI(
+export async function streamAssistantReplyToUI(
     result: {
         textStream: AsyncIterable<string>;
         text: PromiseLike<string>;
@@ -288,7 +289,7 @@ async function streamAssistantReplyToUI(
     onChunk: StreamCallback,
     userText: string
 ): Promise<{ text: string; reminder: ReminderConfig | null; taskUpdate: TaskUpdate | null }> {
-    let merged = await recoverAssistantTextFromStream(result);
+    let merged = await recoverAssistantTextFromStream(result, onChunk);
     let fromMessages = '';
     if (!merged.trim()) {
         fromMessages = await extractAssistantTextFromResponseMessages(result);
@@ -297,10 +298,8 @@ async function streamAssistantReplyToUI(
 
     debugLog('[FocusFairy] Raw AI text:', JSON.stringify(merged));
 
-    for (let i = 0; i < merged.length; i++) {
-        onChunk(merged.slice(0, i + 1));
-        await new Promise(resolve => setTimeout(resolve, 15));
-    }
+    // Text recovered after the stream (no deltas arrived) shows all at once.
+    onChunk(merged);
 
     const staticCalls = await result.staticToolCalls;
     debugLog('[FocusFairy] Tool calls:', JSON.stringify(staticCalls, null, 2));
@@ -562,6 +561,8 @@ export const streamReply = async (
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
         system: buildSystemPrompt(context),
         messages: history,
+        // Providers send text in uneven bursts; this releases it word by word.
+        experimental_transform: smoothStream(),
         tools: {
             setReminder: setReminderTool,
             recordTasks: recordTasksTool,

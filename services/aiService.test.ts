@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyStatedDurations, autoReminder, extractReminderFromStaticToolCalls, toChatHistory, type ReminderConfig } from './aiService.ts';
+import { applyStatedDurations, autoReminder, extractReminderFromStaticToolCalls, streamAssistantReplyToUI, toChatHistory, type ReminderConfig } from './aiService.ts';
 
 const recurring = (minutes: number, sessionMinutes?: number): ReminderConfig =>
     ({ type: 'recurring', minutes, sessionMinutes, reason: '' });
@@ -82,4 +82,28 @@ test('builds model history from the visible chat', () => {
         { role: 'assistant', content: "Let's go!\n\n🔔 How is the essay going?" },
         { role: 'user', content: 'good' },
     ]);
+});
+
+test('shows streamed text before the model finishes', async () => {
+    let finish!: () => void;
+    const modelDone = new Promise<void>(resolve => { finish = resolve; });
+    async function* textStream() {
+        yield 'Hello ';
+        await modelDone;
+        yield 'there';
+    }
+    const shown: string[] = [];
+    const reply = streamAssistantReplyToUI({
+        textStream: textStream(),
+        text: Promise.resolve('Hello there'),
+        response: Promise.resolve({ messages: [] }),
+        staticToolCalls: Promise.resolve([]),
+    }, text => shown.push(text), 'hi');
+
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(shown, ['Hello ']);
+
+    finish();
+    assert.equal((await reply).text, 'Hello there');
+    assert.equal(shown.at(-1), 'Hello there');
 });
