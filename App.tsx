@@ -56,6 +56,16 @@ const createChatMessageId = () => {
     return `msg-${Date.now()}-${randomPart}`;
 };
 
+// iOS Safari only has the Notification API in Home Screen apps, so check it exists first.
+const canNotify = () => 'Notification' in window && Notification.permission === 'granted';
+
+// Call from a submit handler: Safari ignores permission requests without a user gesture.
+const requestNotificationPermission = () => {
+    if ('Notification' in window && Notification.permission === 'default') {
+        void Notification.requestPermission();
+    }
+};
+
 const resolveCurrentTaskTitle = (taskUpdate: TaskUpdate | null, fallbackTask: string) => {
     const explicitCurrent = taskUpdate?.currentTaskTitle?.trim();
     if (explicitCurrent) return explicitCurrent;
@@ -104,7 +114,6 @@ const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [streamingText, setStreamingText] = useState<string>('');
     const [streamingComplete, setStreamingComplete] = useState<boolean>(false);
-    const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
     const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
     const [selectedProvider, setSelectedProvider] = useState<AIProvider>('gemini');
     const [apiKeys, setApiKeys] = useState<Record<AIProvider, string>>({
@@ -280,12 +289,6 @@ const App: React.FC = () => {
             openrouter: (localStorage.getItem('openrouter_api_key') || '').trim(),
             groq: (localStorage.getItem('groq_api_key') || '').trim(),
         });
-
-        if ('Notification' in window && Notification.permission !== 'denied') {
-            Notification.requestPermission().then(setNotificationPermission);
-        } else if ('Notification' in window) {
-            setNotificationPermission(Notification.permission);
-        }
     }, []);
 
     // Close the settings modal with Escape
@@ -470,11 +473,15 @@ const App: React.FC = () => {
             const checkinMessage = await generateCheckinMessage(taskForCheckin);
 
             // Show browser notification if permission granted
-            if (Notification.permission === 'granted') {
-                new Notification('Focus Fairy Check-in ✨', {
-                    body: checkinMessage,
-                    icon: '/fairy.svg'
-                });
+            if (canNotify()) {
+                try {
+                    new Notification('Focus Fairy Check-in ✨', {
+                        body: checkinMessage,
+                        icon: '/fairy.svg'
+                    });
+                } catch {
+                    // ponytail: Android Chrome only shows notifications from a service worker; until there is one, the check-in still lands in chat.
+                }
             }
 
             // Add message to chat
@@ -498,6 +505,9 @@ const App: React.FC = () => {
         currentTaskRef.current = fallbackTask;
         timerTaskRef.current = fallbackTask;
         timerTypeRef.current = reminder.type;
+        if ('Notification' in window && !canNotify()) {
+            pushToast("Check-ins will show up here. Allow notifications to get them while you're in another tab.", 'info');
+        }
         // Epsilon keeps float division (e.g. 0.3 / 0.1) from dropping the last check-in.
         checkinsLeftRef.current = reminder.type === 'recurring' && reminder.sessionMinutes
             ? Math.floor(reminder.sessionMinutes / reminder.minutes + 1e-6)
@@ -516,7 +526,7 @@ const App: React.FC = () => {
         if (workerRef.current) {
             workerRef.current.postMessage({ action: 'start', milliseconds, type: reminder.type });
         }
-    }, []);
+    }, [pushToast]);
 
     // Initialize Web Worker and handle messages
     useEffect(() => {
@@ -563,14 +573,6 @@ const App: React.FC = () => {
             return false;
         }
 
-        // Check browser API directly instead of React state (which can be stale)
-        const currentPermission = Notification.permission;
-
-        if (currentPermission !== 'granted') {
-            pushToast('Enable notifications in your browser to get check-in reminders!', 'warning');
-            return false;
-        }
-
         if (activeTimer) {
             setPendingTimerRequest({
                 reminder,
@@ -586,7 +588,7 @@ const App: React.FC = () => {
 
         startTimer(reminder, fallbackTask);
         return true;
-    }, [activeTimer, pushToast, startTimer, timerRemainingSeconds]);
+    }, [activeTimer, startTimer, timerRemainingSeconds]);
 
     const confirmPendingTimerReplacement = useCallback(() => {
         if (!pendingTimerRequest) return;
@@ -654,6 +656,7 @@ const App: React.FC = () => {
 
     const handleTaskSubmit = async (newTask: string) => {
         if (!newTask.trim() || !ensureApiKey()) return;
+        requestNotificationPermission();
         setTask(newTask);
 
         // Immediately show the user's message before waiting for AI response
@@ -669,6 +672,7 @@ const App: React.FC = () => {
 
     const handleSendMessage = async (userMessage: string) => {
         if (!userMessage.trim() || !task || !ensureApiKey()) return;
+        requestNotificationPermission();
 
         const userMsg: ChatMessage = { id: createChatMessageId(), sender: 'user', text: userMessage };
         setMessages(prev => [...prev, userMsg]);
