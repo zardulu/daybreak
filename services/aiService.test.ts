@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyStatedDurations, extractReminderFromStaticToolCalls, toChatHistory, type ReminderConfig } from './aiService.ts';
+import { applyStatedDurations, autoReminder, extractReminderFromStaticToolCalls, toChatHistory, type ReminderConfig } from './aiService.ts';
 
 const recurring = (minutes: number, sessionMinutes?: number): ReminderConfig =>
     ({ type: 'recurring', minutes, sessionMinutes, reason: '' });
@@ -33,9 +33,24 @@ test('caps the check-in gap at the session length', () => {
     assert.equal(applyStatedDurations(recurring(10, 5), '')?.minutes, 5);
 });
 
-test('leaves one-time reminders alone', () => {
-    const reminder: ReminderConfig = { type: 'one-time', minutes: 30, reason: '' };
-    assert.equal(applyStatedDurations(reminder, 'remind me in 30 minutes, stretching for 5 minutes'), reminder);
+const oneTime = (minutes: number): ReminderConfig => ({ type: 'one-time', minutes, reason: '' });
+
+test('uses the reminder time the user typed over the model pick', () => {
+    assert.equal(applyStatedDurations(oneTime(5), 'remind me in 2 minutes')?.minutes, 2);
+    assert.equal(applyStatedDurations(oneTime(30), 'remind me after an hour')?.minutes, 60);
+    assert.equal(applyStatedDurations(oneTime(1), 'ping me in 30 seconds')?.minutes, 0.5);
+    // "for N" is a session length, not the reminder time
+    assert.equal(applyStatedDurations(oneTime(10), 'remind me in 10 minutes, stretching for 5 minutes')?.minutes, 10);
+    assert.equal(applyStatedDurations(oneTime(15), 'remind me to stretch')?.minutes, 15);
+});
+
+test('a forgotten "remind me in N" becomes a one-time reminder, not 25-minute check-ins', () => {
+    assert.deepEqual(
+        applyStatedDurations(autoReminder('remind me in 2 minutes to stretch'), 'remind me in 2 minutes to stretch'),
+        { type: 'one-time', minutes: 2, reason: 'Auto-set: AI recorded tasks but did not set a reminder' }
+    );
+    assert.equal(autoReminder('focus for 5 minutes').type, 'recurring');
+    assert.equal(autoReminder('finish my essay in 2 hours').type, 'recurring');
 });
 
 test('keeps the model interval when the user gave a session length', () => {

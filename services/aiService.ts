@@ -67,9 +67,12 @@ function ensureStreamedAssistantText(
     if (reminder && taskUpdate && taskUpdate.tasks.length > 0) {
         const taskName = taskUpdate.currentTaskTitle || taskUpdate.tasks[0].title;
         const timeDisplay = reminder.minutes >= 1
-            ? `every ${reminder.minutes} min`
-            : `every ${Math.round(reminder.minutes * 60)} sec`;
-        return `Alright, let's lock in on "${taskName}"! I'll check in ${timeDisplay} to keep you on track ✨`;
+            ? `${reminder.minutes} min`
+            : `${Math.round(reminder.minutes * 60)} sec`;
+        const plan = reminder.type === 'one-time'
+            ? `I'll remind you in ${timeDisplay}`
+            : `I'll check in every ${timeDisplay} to keep you on track`;
+        return `Alright, let's lock in on "${taskName}"! ${plan} ✨`;
     }
     if (reminder) {
         return "Let's do this! I'll check in to keep you on track. You've got this ✨";
@@ -208,13 +211,6 @@ function extractTaskUpdateFromStaticToolCalls(
     return taskUpdate;
 }
 
-/** Default reminder to auto-inject when the AI recorded tasks but forgot to set a reminder. */
-const DEFAULT_AUTO_REMINDER: ReminderConfig = {
-    type: 'recurring',
-    minutes: 25,
-    reason: 'Auto-set: AI recorded tasks but did not set a reminder',
-};
-
 const DURATION = String.raw`(\d+(?:\.\d+)?|an?)?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b`;
 // "for 2 hours", "for the next hour", "over the next 30 min", or a reply that is only a duration
 // ("about 45 minutes", answering "how long?"). Not "in 2 hours", which reads as a reminder time.
@@ -223,6 +219,8 @@ const SESSION_PHRASES = [
     new RegExp(String.raw`^\s*(?:about|around|like|maybe|roughly)?\s*${DURATION}\W*$`, 'i'),
 ];
 const INTERVAL_PHRASES = [new RegExp(String.raw`\bevery\s+${DURATION}`, 'i')];
+// "in 2 minutes", "after an hour", "in exactly 30 min"
+const REMINDER_PHRASES = [new RegExp(String.raw`\b(?:in|after)\s+(?:exactly\s+)?${DURATION}`, 'i')];
 
 const statedMinutes = (text: string, phrases: RegExp[]): number | undefined => {
     for (const phrase of phrases) {
@@ -241,12 +239,17 @@ const statedMinutes = (text: string, phrases: RegExp[]): number | undefined => {
 };
 
 /**
- * Models sometimes skip sessionMinutes or setReminder entirely, so recurring check-ins also read
- * durations the user typed. Each phrase fills only its own field: "every N" always sets the gap,
- * while "for N" only fills a missing session length, since it can describe other things too.
+ * Models sometimes pick their own numbers or skip setReminder entirely, so reminders also read
+ * durations the user typed. Each phrase fills only its own field: "in N" sets a one-time reminder,
+ * "every N" always sets the check-in gap, and "for N" only fills a missing session length, since
+ * it can describe other things too.
  */
 export function applyStatedDurations(reminder: ReminderConfig | null, userText: string): ReminderConfig | null {
-    if (reminder?.type !== 'recurring') return reminder;
+    if (!reminder) return null;
+
+    if (reminder.type === 'one-time') {
+        return { ...reminder, minutes: statedMinutes(userText, REMINDER_PHRASES) ?? reminder.minutes };
+    }
 
     const sessionMinutes = reminder.sessionMinutes ?? statedMinutes(userText, SESSION_PHRASES);
     const minutes = statedMinutes(userText, INTERVAL_PHRASES) ?? reminder.minutes;
@@ -256,6 +259,17 @@ export function applyStatedDurations(reminder: ReminderConfig | null, userText: 
         // A gap longer than the session would never check in before it ends.
         minutes: sessionMinutes ? Math.min(minutes, sessionMinutes) : minutes,
         sessionMinutes,
+    };
+}
+
+/** Reminder to auto-inject when the AI recorded tasks but forgot to set one. */
+export function autoReminder(userText: string): ReminderConfig {
+    // "remind me in 2 minutes" asks for one reminder; anything else gets recurring check-ins.
+    const asksForReminder = /\bremind\b/i.test(userText) && statedMinutes(userText, REMINDER_PHRASES) !== undefined;
+    return {
+        type: asksForReminder ? 'one-time' : 'recurring',
+        minutes: 25,
+        reason: 'Auto-set: AI recorded tasks but did not set a reminder',
     };
 }
 
@@ -294,7 +308,7 @@ async function streamAssistantReplyToUI(
     const aiEmittedNoText = !merged.trim() && !fromMessages.trim();
     if (aiEmittedNoText && taskUpdate && taskUpdate.tasks.length > 0 && !reminder) {
         console.log('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
-        reminder = DEFAULT_AUTO_REMINDER;
+        reminder = autoReminder(userText);
     }
 
     reminder = applyStatedDurations(reminder, userText);
