@@ -2,19 +2,14 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import InitialTaskInput from './components/InitialTaskInput';
 import ChatInterface from './components/ChatInterface';
 import FocusShell from './components/FocusShell';
-import { ChatMessage, SessionTask, AIProvider, ScheduledTask } from './types';
-import { generateCheckinMessage, hasApiKey, ReminderConfig, TaskUpdate, streamReply, toChatHistory, SessionContext, ChatTurn } from './services/aiService';
+import SettingsModal from './components/SettingsModal';
+import { ChatMessage, SessionTask, ScheduledTask } from './types';
+import { generateCheckinMessage, hasApiKey, loadLocalSettings, saveLocalSettings, TaskUpdate, streamReply, toChatHistory, SessionContext, ChatTurn } from './services/aiService';
 import { useAuth } from './contexts/AuthContext';
 import * as dbService from './services/dbService';
 import { useDailySession, getTodayDateString } from './hooks/useDailySession';
+import { useCheckinTimer } from './hooks/useCheckinTimer';
 import { ToastContainer, useToasts } from './components/Toasts';
-
-const PROVIDERS: { id: AIProvider; name: string }[] = [
-    { id: 'gemini', name: 'Gemini' },
-    { id: 'openai', name: 'OpenAI' },
-    { id: 'openrouter', name: 'OpenRouter' },
-    { id: 'groq', name: 'Groq' },
-];
 
 interface SessionTaskState {
     tasks: SessionTask[];
@@ -25,23 +20,6 @@ interface TaskUpdateResult {
     currentTitle: string;
     tasks: SessionTask[];
     shouldShowTaskList: boolean;
-}
-
-interface ActiveTimer {
-    type: 'one-time' | 'recurring';
-    task: string;
-    durationMs: number;
-    endAt: number;
-}
-
-interface PendingTimerRequest {
-    reminder: ReminderConfig;
-    fallbackTask: string;
-    currentTimer: {
-        type: ActiveTimer['type'];
-        task: string;
-        remainingSeconds: number;
-    };
 }
 
 const normalizeTaskTitle = (title: string) => title.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -90,15 +68,7 @@ const App: React.FC = () => {
         setStreamingText('');
         setStreamingComplete(false);
         setIsLoading(false);
-        // Stop any active timers
-        if (workerRef.current) {
-            workerRef.current.postMessage({ action: 'stop' });
-        }
-        setActiveTimer(null);
-        timerTypeRef.current = null;
-        timerTaskRef.current = '';
-        checkinsLeftRef.current = null;
-        setPendingTimerRequest(null);
+        stopTimer();
     }, []);
     const [task, setTask] = useState<string | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -110,41 +80,70 @@ const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [streamingText, setStreamingText] = useState<string>('');
     const [streamingComplete, setStreamingComplete] = useState<boolean>(false);
-    const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
-    const [selectedProvider, setSelectedProvider] = useState<AIProvider>('gemini');
-    const [apiKeys, setApiKeys] = useState<Record<AIProvider, string>>({
-        gemini: '',
-        openai: '',
-        openrouter: '',
-        groq: ''
-    });
-    const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(null);
-    const [pendingTimerRequest, setPendingTimerRequest] = useState<PendingTimerRequest | null>(null);
-    const [currentTime, setCurrentTime] = useState<number>(() => Date.now());
-    const workerRef = useRef<Worker | null>(null);
-    const currentTaskRef = useRef<string>(''); // Store current task for worker callback
-    const timerTaskRef = useRef<string>(''); // Keep active timer check-ins tied to their original task
-    const checkinsLeftRef = useRef<number | null>(null); // Recurring check-ins left in the session; null = no end
+    const [showSettings, setShowSettings] = useState<boolean>(false);
+    const closeSettings = useCallback(() => setShowSettings(false), []);
+
+    // Prevent concurrent API calls
+    const isGeneratingRef = useRef<boolean>(false);
+
+    // Send a single check-in (used by both one-time and recurring)
+    const sendCheckin = useCallback(async (timerTask: string) => {
+        if (isGeneratingRef.current) {
+            return;
+        }
+
+        isGeneratingRef.current = true;
+
+        try {
+            const checkinMessage = await generateCheckinMessage(timerTask);
+
+            // Show browser notification if permission granted
+            if (canNotify()) {
+                try {
+                    new Notification('Focus Fairy Check-in ✨', {
+                        body: checkinMessage,
+                        icon: '/fairy.svg'
+                    });
+                } catch {
+                    // ponytail: Android Chrome only shows notifications from a service worker; until there is one, the check-in still lands in chat.
+                }
+            }
+
+            // Add message to chat
+            const msgId = createChatMessageId();
+            const msg: ChatMessage = { id: msgId, sender: 'ai', text: `🔔 ${checkinMessage}` };
+            setMessages(prev => [...prev, msg]);
+            const currentUser = userRef.current;
+            if (currentUser) {
+                void dbService.saveMessage(currentUser.uid, sessionIdRef.current, msg);
+            }
+        } catch {
+            pushToast('Check-in failed. Please check your API key in Settings.', 'error');
+        } finally {
+            isGeneratingRef.current = false;
+        }
+    }, [pushToast]);
+
+    const warnIfNotificationsOff = useCallback(() => {
+        if ('Notification' in window && !canNotify()) {
+            pushToast("Check-ins will show up here. Allow notifications to get them while you're in another tab.", 'info');
+        }
+    }, [pushToast]);
+
+    const {
+        activeTimer,
+        timerRemainingSeconds,
+        timerConfirmation,
+        handleReminderConfig,
+        confirmPendingTimerReplacement,
+        keepCurrentTimer,
+        stopTimer,
+    } = useCheckinTimer({ onCheckin: sendCheckin, onStart: warnIfNotificationsOff });
 
     // Hold the midnight rollover while a timer is running so it can't wipe a live session
-    const { sessionId, isNewSession, displayDate, sessionLoading } = useDailySession(user, handleSessionChange, activeTimer !== null);
+    const { sessionId, displayDate, sessionLoading } = useDailySession(user, handleSessionChange, activeTimer !== null);
     const sessionIdRef = useRef(sessionId);
     useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
-
-    // Refresh the visible countdown once per second while a timer is running.
-    useEffect(() => {
-        if (!activeTimer) return;
-
-        const updateCurrentTime = () => setCurrentTime(Date.now());
-        updateCurrentTime();
-        const intervalId = window.setInterval(updateCurrentTime, 1000);
-
-        return () => window.clearInterval(intervalId);
-    }, [activeTimer]);
-
-    const timerRemainingSeconds = activeTimer
-        ? Math.max(0, Math.ceil((activeTimer.endAt - currentTime) / 1000))
-        : null;
 
     // Keep userRef updated to avoid stale closures in worker callbacks
     useEffect(() => {
@@ -229,8 +228,6 @@ const App: React.FC = () => {
 
         setSessionTaskState({ tasks, currentTaskId });
 
-        currentTaskRef.current = currentTitle;
-
         // Sync to Firebase if user is logged in
         if (user) {
             tasks.forEach(t => void dbService.saveTask(user.uid, sessionId, t));
@@ -277,32 +274,6 @@ const App: React.FC = () => {
         return actions.join(' and ');
     };
 
-    useEffect(() => {
-        // Load saved provider and keys
-        const savedProvider = localStorage.getItem('ai_provider') as AIProvider;
-        if (savedProvider) {
-            setSelectedProvider(savedProvider);
-        }
-
-        setApiKeys({
-            gemini: (localStorage.getItem('gemini_api_key') || '').trim(),
-            openai: (localStorage.getItem('openai_api_key') || '').trim(),
-            openrouter: (localStorage.getItem('openrouter_api_key') || '').trim(),
-            groq: (localStorage.getItem('groq_api_key') || '').trim(),
-        });
-    }, []);
-
-    // Close the settings modal with Escape
-    useEffect(() => {
-        if (!showApiKeyModal) return;
-
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setShowApiKeyModal(false);
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [showApiKeyModal]);
-
     // Sync remote data when user signs in/out
     useEffect(() => {
         if (authLoading || sessionLoading) return; // Wait for auth and session to resolve
@@ -324,17 +295,9 @@ const App: React.FC = () => {
                 // 1. Sync settings if remote settings exist, otherwise upload local ones
                 const remoteSettings = await dbService.loadSettings(user.uid);
                 if (remoteSettings) {
-                    setSelectedProvider(remoteSettings.provider);
-                    setApiKeys(remoteSettings.apiKeys);
-                    localStorage.setItem('ai_provider', remoteSettings.provider);
-                    Object.entries(remoteSettings.apiKeys).forEach(([prov, key]) => {
-                        localStorage.setItem(`${prov}_api_key`, key);
-                    });
+                    saveLocalSettings(remoteSettings);
                 } else {
-                    await dbService.saveSettings(user.uid, {
-                        provider: selectedProvider,
-                        apiKeys,
-                    });
+                    await dbService.saveSettings(user.uid, loadLocalSettings());
                 }
 
                 // 2. Load remote messages, tasks, and state for the current session
@@ -360,7 +323,6 @@ const App: React.FC = () => {
                     }
                     if (remoteState?.task) {
                         setTask(remoteState.task);
-                        currentTaskRef.current = remoteState.task;
                     }
                 }
 
@@ -401,7 +363,6 @@ const App: React.FC = () => {
                     if (!remoteState?.task) {
                         const firstTitle = newSessionTasks[0]?.title || '';
                         setTask(firstTitle);
-                        currentTaskRef.current = firstTitle;
                         void dbService.saveChatState(user.uid, sessionId, {
                             task: firstTitle,
                             currentTaskId: newSessionTasks[0]?.id || null
@@ -441,168 +402,6 @@ const App: React.FC = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user, authLoading, sessionId, sessionLoading]);
 
-    const handleSaveSettings = () => {
-        localStorage.setItem('ai_provider', selectedProvider);
-        localStorage.setItem('gemini_api_key', apiKeys.gemini.trim());
-        localStorage.setItem('openai_api_key', apiKeys.openai.trim());
-        localStorage.setItem('openrouter_api_key', apiKeys.openrouter.trim());
-        localStorage.setItem('groq_api_key', apiKeys.groq.trim());
-        setShowApiKeyModal(false);
-
-        if (user) {
-            void dbService.saveSettings(user.uid, {
-                provider: selectedProvider,
-                apiKeys
-            });
-        }
-    };
-
-    // Prevent concurrent API calls
-    const isGeneratingRef = useRef<boolean>(false);
-    const timerTypeRef = useRef<'one-time' | 'recurring' | null>(null);
-
-    // Send a single check-in (used by both one-time and recurring)
-    const sendCheckin = useCallback(async (fallbackTask: string) => {
-        if (isGeneratingRef.current) {
-            return;
-        }
-
-        isGeneratingRef.current = true;
-
-        try {
-            const taskForCheckin = fallbackTask || currentTaskRef.current;
-            const checkinMessage = await generateCheckinMessage(taskForCheckin);
-
-            // Show browser notification if permission granted
-            if (canNotify()) {
-                try {
-                    new Notification('Focus Fairy Check-in ✨', {
-                        body: checkinMessage,
-                        icon: '/fairy.svg'
-                    });
-                } catch {
-                    // ponytail: Android Chrome only shows notifications from a service worker; until there is one, the check-in still lands in chat.
-                }
-            }
-
-            // Add message to chat
-            const msgId = createChatMessageId();
-            const msg: ChatMessage = { id: msgId, sender: 'ai', text: `🔔 ${checkinMessage}` };
-            setMessages(prev => [...prev, msg]);
-            const currentUser = userRef.current;
-            if (currentUser) {
-                void dbService.saveMessage(currentUser.uid, sessionIdRef.current, msg);
-            }
-        } catch {
-            pushToast('Check-in failed. Please check your API key in Settings.', 'error');
-        } finally {
-            isGeneratingRef.current = false;
-        }
-    }, [pushToast]);
-
-    // Start a one-time or recurring timer - using Web Worker for reliable background execution
-    const startTimer = useCallback((reminder: ReminderConfig, fallbackTask: string) => {
-        // Store task for callback
-        currentTaskRef.current = fallbackTask;
-        timerTaskRef.current = fallbackTask;
-        timerTypeRef.current = reminder.type;
-        if ('Notification' in window && !canNotify()) {
-            pushToast("Check-ins will show up here. Allow notifications to get them while you're in another tab.", 'info');
-        }
-        // Epsilon keeps float division (e.g. 0.3 / 0.1) from dropping the last check-in.
-        checkinsLeftRef.current = reminder.type === 'recurring' && reminder.sessionMinutes
-            ? Math.floor(reminder.sessionMinutes / reminder.minutes + 1e-6)
-            : null;
-
-        const milliseconds = reminder.minutes * 60 * 1000;
-
-        setActiveTimer({
-            type: reminder.type,
-            task: fallbackTask,
-            durationMs: milliseconds,
-            endAt: Date.now() + milliseconds,
-        });
-
-        // Start worker timer
-        if (workerRef.current) {
-            workerRef.current.postMessage({ action: 'start', milliseconds, type: reminder.type });
-        }
-    }, [pushToast]);
-
-    // Initialize Web Worker and handle messages
-    useEffect(() => {
-        // Create worker
-        workerRef.current = new Worker('/timer-worker.js');
-
-        // Handle timer ticks from worker
-        workerRef.current.onmessage = async (e) => {
-            if (e.data.type === 'tick') {
-                const timerTask = timerTaskRef.current || currentTaskRef.current;
-                if (checkinsLeftRef.current !== null) checkinsLeftRef.current -= 1;
-
-                if (timerTypeRef.current === 'one-time' || checkinsLeftRef.current === 0) {
-                    // Last check-in: one-time reminders fire once, sessions end when their time is up.
-                    workerRef.current?.postMessage({ action: 'stop' });
-                    setActiveTimer(null);
-                    timerTypeRef.current = null;
-                    timerTaskRef.current = '';
-                    checkinsLeftRef.current = null;
-                } else if (timerTypeRef.current === 'recurring') {
-                    // The worker interval keeps running; move the UI deadline to
-                    // the next interval as soon as a check-in is triggered.
-                    setActiveTimer(previousTimer => previousTimer
-                        ? { ...previousTimer, endAt: Date.now() + previousTimer.durationMs }
-                        : previousTimer
-                    );
-                }
-
-                await sendCheckin(timerTask);
-            }
-        };
-
-        return () => {
-            if (workerRef.current) {
-                workerRef.current.postMessage({ action: 'stop' });
-                workerRef.current.terminate();
-            }
-        };
-    }, [sendCheckin]);
-
-    // Handle reminder configuration from AI tool calls. Returns whether a timer started right away.
-    const handleReminderConfig = useCallback((reminder: ReminderConfig | null, fallbackTask: string): boolean => {
-        if (!reminder) {
-            return false;
-        }
-
-        if (activeTimer) {
-            setPendingTimerRequest({
-                reminder,
-                fallbackTask,
-                currentTimer: {
-                    type: activeTimer.type,
-                    task: activeTimer.task,
-                    remainingSeconds: timerRemainingSeconds ?? 0,
-                },
-            });
-            return false;
-        }
-
-        startTimer(reminder, fallbackTask);
-        return true;
-    }, [activeTimer, startTimer, timerRemainingSeconds]);
-
-    const confirmPendingTimerReplacement = useCallback(() => {
-        if (!pendingTimerRequest) return;
-
-        const { reminder, fallbackTask } = pendingTimerRequest;
-        setPendingTimerRequest(null);
-        startTimer(reminder, fallbackTask);
-    }, [pendingTimerRequest, startTimer]);
-
-    const keepCurrentTimer = useCallback(() => {
-        setPendingTimerRequest(null);
-    }, []);
-
     const sessionContext: SessionContext = {
         tasks: sessionTaskState.tasks.map(sessionTask => sessionTask.title),
         currentTask: currentTaskTitle || null,
@@ -613,7 +412,7 @@ const App: React.FC = () => {
     const ensureApiKey = () => {
         if (hasApiKey()) return true;
         pushToast('Add an API key in Settings to get started. Free-tier keys work!', 'info');
-        setShowApiKeyModal(true);
+        setShowSettings(true);
         return false;
     };
 
@@ -684,24 +483,10 @@ const App: React.FC = () => {
         await sendToFairy(userMessage, toChatHistory([...messages, userMsg]));
     };
 
-    const currentProviderHasKey = apiKeys[selectedProvider]?.trim() !== '';
-    const timerConfirmation = pendingTimerRequest
-        ? {
-            currentTask: activeTimer?.task || pendingTimerRequest.currentTimer.task,
-            currentType: activeTimer?.type ?? pendingTimerRequest.currentTimer.type,
-            currentRemainingSeconds: activeTimer
-                ? timerRemainingSeconds ?? 0
-                : pendingTimerRequest.currentTimer.remainingSeconds,
-            nextTask: pendingTimerRequest.fallbackTask,
-            nextType: pendingTimerRequest.reminder.type,
-            nextDurationSeconds: Math.max(1, Math.round(pendingTimerRequest.reminder.minutes * 60)),
-        }
-        : null;
-
     return (
         <>
             <FocusShell
-                onApiKeyClick={() => setShowApiKeyModal(true)}
+                onApiKeyClick={() => setShowSettings(true)}
                 displayDate={displayDate}
                 timerRemainingSeconds={timerRemainingSeconds}
                 timerType={activeTimer?.type ?? null}
@@ -731,115 +516,7 @@ const App: React.FC = () => {
             {/* Toast Notifications */}
             <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-            {/* API Key Modal */}
-            {showApiKeyModal && (
-                <div
-                    className="modal-overlay fixed inset-0 flex items-center justify-center z-50"
-                    style={{
-                        backgroundColor: 'rgba(0, 0, 0, 0.25)',
-                        backdropFilter: 'blur(8px)',
-                        WebkitBackdropFilter: 'blur(8px)'
-                    }}
-                    onClick={() => setShowApiKeyModal(false)}
-                >
-                    <div
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="api-key-modal-title"
-                        className="modal-panel custom-scrollbar rounded-2xl p-4 sm:p-6 max-w-md w-full mx-4 shadow-xl max-h-[90vh] overflow-y-auto"
-                        style={{
-                            backgroundColor: 'var(--bg-warm)',
-                            border: '1px solid var(--border-light)'
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <h2 id="api-key-modal-title" className="font-title text-2xl font-semibold mb-4" style={{ color: 'var(--text-dark)' }}>
-                            AI Provider Settings
-                        </h2>
-
-                        {/* Provider Selection */}
-                        <p className="text-sm mb-2" style={{ color: 'var(--text-muted)' }}>
-                            Select AI Provider
-                        </p>
-                        <div className="flex flex-col gap-2 mb-4">
-                            {PROVIDERS.map((provider) => (
-                                <button
-                                    key={provider.id}
-                                    onClick={() => setSelectedProvider(provider.id)}
-                                    className="flex items-center gap-3 p-3 rounded-xl transition-all text-left"
-                                    style={{
-                                        borderColor: selectedProvider === provider.id ? 'var(--accent-pink)' : 'var(--border-light)',
-                                        backgroundColor: selectedProvider === provider.id ? 'var(--accent-pink-light)' : 'white'
-                                    }}
-                                >
-                                    <div
-                                        className="w-4 h-4 rounded-full border-2 flex items-center justify-center"
-                                        style={{ borderColor: selectedProvider === provider.id ? 'var(--accent-pink)' : 'var(--border-light)' }}
-                                    >
-                                        {selectedProvider === provider.id && (
-                                            <div
-                                                className="w-2 h-2 rounded-full"
-                                                style={{ backgroundColor: 'var(--accent-pink)' }}
-                                            />
-                                        )}
-                                    </div>
-                                    <div className="font-medium text-sm" style={{ color: 'var(--text-dark)' }}>
-                                        {provider.name}
-                                        {apiKeys[provider.id] && (
-                                            <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>✓ Key saved</span>
-                                        )}
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* API Key Input */}
-                        <p className="text-sm mb-2" style={{ color: 'var(--text-muted)' }}>
-                            {PROVIDERS.find(p => p.id === selectedProvider)?.name} API Key
-                        </p>
-                        <input
-                            type="password"
-                            value={apiKeys[selectedProvider]}
-                            onChange={(e) => setApiKeys(prev => ({ ...prev, [selectedProvider]: e.target.value }))}
-                            placeholder={`Enter your ${PROVIDERS.find(p => p.id === selectedProvider)?.name} API key...`}
-                            className="input-field w-full mb-4"
-                        />
-
-                        <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
-                            {selectedProvider === 'gemini' && (
-                                <>Get your key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="underline">Google AI Studio</a></>
-                            )}
-                            {selectedProvider === 'openai' && (
-                                <>Get your key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="underline">OpenAI Platform</a></>
-                            )}
-                            {selectedProvider === 'openrouter' && (
-                                <>Get your key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="underline">OpenRouter</a></>
-                            )}
-                            {selectedProvider === 'groq' && (
-                                <>Get your key from <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="underline">Groq Console</a></>
-                            )}
-                        </p>
-
-                        <div className="flex gap-3 justify-end">
-                            <button
-                                onClick={() => setShowApiKeyModal(false)}
-                                className="px-4 py-2 text-sm rounded-full"
-                                style={{ color: 'var(--text-muted)' }}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleSaveSettings}
-                                className="btn-dark"
-                                disabled={!currentProviderHasKey}
-                                style={{ opacity: currentProviderHasKey ? 1 : 0.5 }}
-                            >
-                                Save Settings
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {showSettings && <SettingsModal onClose={closeSettings} />}
         </>
     );
 };

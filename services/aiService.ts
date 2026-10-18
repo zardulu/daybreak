@@ -1,8 +1,6 @@
-import { generateText, streamText, type LanguageModel, tool } from 'ai';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
+import { generateText, smoothStream, streamText, type LanguageModel, tool } from 'ai';
 import { z } from 'zod';
-import type { AIProvider, ChatMessage } from '../types';
+import type { AIProvider, AISettings, ChatMessage } from '../types';
 
 // Streaming callback type
 export type StreamCallback = (chunk: string) => void;
@@ -42,6 +40,11 @@ export interface AIResponse {
     reminder: ReminderConfig | null;
     taskUpdate: TaskUpdate | null;
 }
+
+// Replies and tool calls, for checking timer values in `npm run dev`. Silent in builds and tests.
+const debugLog = (...args: unknown[]) => {
+    if (import.meta.env?.DEV) console.log(...args);
+};
 
 /**
  * Cap completion length so providers (especially OpenRouter) do not reserve huge max_tokens
@@ -91,11 +94,12 @@ function ensureStreamedAssistantText(
 async function recoverAssistantTextFromStream(result: {
     textStream: AsyncIterable<string>;
     text: PromiseLike<string>;
-}): Promise<string> {
+}, onChunk: StreamCallback): Promise<string> {
     let streamedText = '';
     try {
         for await (const chunk of result.textStream) {
             streamedText += chunk;
+            onChunk(streamedText);
         }
     } catch {
         /* stream may fail if the request errors */
@@ -273,7 +277,7 @@ export function autoReminder(userText: string): ReminderConfig {
     };
 }
 
-async function streamAssistantReplyToUI(
+export async function streamAssistantReplyToUI(
     result: {
         textStream: AsyncIterable<string>;
         text: PromiseLike<string>;
@@ -283,22 +287,20 @@ async function streamAssistantReplyToUI(
     onChunk: StreamCallback,
     userText: string
 ): Promise<{ text: string; reminder: ReminderConfig | null; taskUpdate: TaskUpdate | null }> {
-    let merged = await recoverAssistantTextFromStream(result);
+    let merged = await recoverAssistantTextFromStream(result, onChunk);
     let fromMessages = '';
     if (!merged.trim()) {
         fromMessages = await extractAssistantTextFromResponseMessages(result);
         merged = fromMessages;
     }
 
-    console.log('[FocusFairy] Raw AI text:', JSON.stringify(merged));
+    debugLog('[FocusFairy] Raw AI text:', JSON.stringify(merged));
 
-    for (let i = 0; i < merged.length; i++) {
-        onChunk(merged.slice(0, i + 1));
-        await new Promise(resolve => setTimeout(resolve, 15));
-    }
+    // Text recovered after the stream (no deltas arrived) shows all at once.
+    onChunk(merged);
 
     const staticCalls = await result.staticToolCalls;
-    console.log('[FocusFairy] Tool calls:', JSON.stringify(staticCalls, null, 2));
+    debugLog('[FocusFairy] Tool calls:', JSON.stringify(staticCalls, null, 2));
 
     let reminder = extractReminderFromStaticToolCalls(staticCalls);
     const taskUpdate = extractTaskUpdateFromStaticToolCalls(staticCalls);
@@ -307,7 +309,7 @@ async function streamAssistantReplyToUI(
     // This prevents the fallback from asking more questions and looping forever.
     const aiEmittedNoText = !merged.trim() && !fromMessages.trim();
     if (aiEmittedNoText && taskUpdate && taskUpdate.tasks.length > 0 && !reminder) {
-        console.log('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
+        debugLog('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
         reminder = autoReminder(userText);
     }
 
@@ -315,7 +317,7 @@ async function streamAssistantReplyToUI(
 
     const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate);
 
-    console.log('[FocusFairy] Final response:', JSON.stringify({ replyText, reminder, taskUpdate }, null, 2));
+    debugLog('[FocusFairy] Final response:', JSON.stringify({ replyText, reminder, taskUpdate }, null, 2));
 
     return { text: replyText, reminder, taskUpdate };
 }
@@ -384,10 +386,25 @@ When the user mentions a task they want to work on, do NOT immediately call setR
 - When you schedule future tasks, acknowledge it in your response (e.g., "I've scheduled those for Thursday! For now, what would you like to focus on?").
 - If the user ONLY mentions future tasks with no current task, do NOT set a reminder — just record the future tasks and ask what they'd like to work on now.`;
 
-const getConfig = (): AIConfig => {
-    const provider = (localStorage.getItem('ai_provider') as AIProvider) || 'gemini';
+const readKey = (provider: AIProvider) => (localStorage.getItem(`${provider}_api_key`) || '').trim();
+
+/** Provider and keys saved in this browser. Every request reads them from here. */
+export const loadLocalSettings = (): AISettings => ({
+    provider: (localStorage.getItem('ai_provider') as AIProvider) || 'gemini',
     // Trim so whitespace-only keys fail fast; @ai-sdk/openai sends Bearer <key> and an empty/space key yields a useless header.
-    const apiKey = (localStorage.getItem(`${provider}_api_key`) || '').trim();
+    apiKeys: { gemini: readKey('gemini'), openai: readKey('openai'), openrouter: readKey('openrouter'), groq: readKey('groq') },
+});
+
+export const saveLocalSettings = ({ provider, apiKeys }: AISettings) => {
+    localStorage.setItem('ai_provider', provider);
+    for (const [id, key] of Object.entries(apiKeys)) {
+        localStorage.setItem(`${id}_api_key`, (key || '').trim());
+    }
+};
+
+const getConfig = (): AIConfig => {
+    const { provider, apiKeys } = loadLocalSettings();
+    const apiKey = apiKeys[provider] ?? '';
 
     if (!apiKey) {
         throw new Error(`No API key found for ${provider}.`);
@@ -406,14 +423,16 @@ export const hasApiKey = (): boolean => {
     }
 };
 
-// Get the appropriate model for each provider
-const getModel = (provider: AIProvider, apiKey: string): LanguageModel => {
+// Get the appropriate model for each provider. SDKs load on first use to keep them out of the startup bundle.
+const getModel = async (provider: AIProvider, apiKey: string): Promise<LanguageModel> => {
     switch (provider) {
         case 'gemini': {
+            const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
             const google = createGoogleGenerativeAI({ apiKey });
             return google('gemini-3-flash-preview');
         }
         case 'openai': {
+            const { createOpenAI } = await import('@ai-sdk/openai');
             const openai = createOpenAI({ apiKey });
             return openai.chat('gpt-4o-mini');
         }
@@ -423,6 +442,7 @@ const getModel = (provider: AIProvider, apiKey: string): LanguageModel => {
                 typeof window !== 'undefined' && window.location?.origin
                     ? window.location.origin
                     : 'http://localhost';
+            const { createOpenAI } = await import('@ai-sdk/openai');
             const openrouter = createOpenAI({
                 apiKey,
                 baseURL: 'https://openrouter.ai/api/v1',
@@ -437,6 +457,7 @@ const getModel = (provider: AIProvider, apiKey: string): LanguageModel => {
         }
         case 'groq': {
             // Use .chat() for Groq (uses /chat/completions endpoint)
+            const { createOpenAI } = await import('@ai-sdk/openai');
             const groq = createOpenAI({
                 apiKey,
                 baseURL: 'https://api.groq.com/openai/v1',
@@ -553,10 +574,12 @@ export const streamReply = async (
     const { provider, apiKey } = getConfig();
 
     const result = streamText({
-        model: getModel(provider, apiKey),
+        model: await getModel(provider, apiKey),
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
         system: buildSystemPrompt(context),
         messages: history,
+        // Providers send text in uneven bursts; this releases it word by word.
+        experimental_transform: smoothStream(),
         tools: {
             setReminder: setReminderTool,
             recordTasks: recordTasksTool,
@@ -576,7 +599,7 @@ export const generateCheckinMessage = async (task: string): Promise<string> => {
 
     try {
         const { provider, apiKey } = getConfig();
-        const model = getModel(provider, apiKey);
+        const model = await getModel(provider, apiKey);
 
         const result = await generateText({
             model,

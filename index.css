@@ -1019,3 +1019,9 @@ body {
   transition: background-color 0.2s;
   font-family: inherit;
 }
+
+/* Tailwind comes last so its utilities win ties with the rules above, as they did when the
+   Play CDN injected them after this file. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
