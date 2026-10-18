@@ -100,10 +100,6 @@ const App: React.FC = () => {
         checkinsLeftRef.current = null;
         setPendingTimerRequest(null);
     }, []);
-    const { sessionId, isNewSession, displayDate, sessionLoading } = useDailySession(user, handleSessionChange);
-    const sessionIdRef = useRef(sessionId);
-    useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
-
     const [task, setTask] = useState<string | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [sessionTaskState, setSessionTaskState] = useState<SessionTaskState>({
@@ -129,6 +125,11 @@ const App: React.FC = () => {
     const currentTaskRef = useRef<string>(''); // Store current task for worker callback
     const timerTaskRef = useRef<string>(''); // Keep active timer check-ins tied to their original task
     const checkinsLeftRef = useRef<number | null>(null); // Recurring check-ins left in the session; null = no end
+
+    // Hold the midnight rollover while a timer is running so it can't wipe a live session
+    const { sessionId, isNewSession, displayDate, sessionLoading } = useDailySession(user, handleSessionChange, activeTimer !== null);
+    const sessionIdRef = useRef(sessionId);
+    useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
     // Refresh the visible countdown once per second while a timer is running.
     useEffect(() => {

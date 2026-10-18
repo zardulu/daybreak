@@ -72,21 +72,28 @@ interface UseDailySessionResult {
  *
  * @param user - Firebase User (null when signed out)
  * @param onSessionChange - Callback fired when session rotates at midnight
+ * @param deferRotation - True while a focus session is running; midnight rotation waits for it
  */
 export const useDailySession = (
   user: User | null,
-  onSessionChange?: (newSessionId: string) => void
+  onSessionChange?: (newSessionId: string) => void,
+  deferRotation = false
 ): UseDailySessionResult => {
   const [sessionId, setSessionId] = useState<string>(getTodaySessionId());
   const [isNewSession, setIsNewSession] = useState<boolean>(false);
   const [sessionLoading, setSessionLoading] = useState<boolean>(true);
   const midnightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSessionChangeRef = useRef(onSessionChange);
+  const deferRotationRef = useRef(deferRotation);
 
-  // Keep callback ref current
+  // Keep callback and defer refs current
   useEffect(() => {
     onSessionChangeRef.current = onSessionChange;
   }, [onSessionChange]);
+
+  useEffect(() => {
+    deferRotationRef.current = deferRotation;
+  }, [deferRotation]);
 
   const todayDate = getTodayDateString();
   const displayDate = formatSessionDate(todayDate);
@@ -157,6 +164,31 @@ export const useDailySession = (
   useEffect(() => {
     if (!user) return;
 
+    let rotationPending = false;
+
+    const rotate = () => {
+      const newSessionId = getTodaySessionId();
+      const newDate = getTodayDateString();
+      rotationPending = false;
+
+      setSessionId(newSessionId);
+      setIsNewSession(true);
+
+      // Create the new session in Firestore
+      if (user) {
+        void dbService.createSession(user.uid, newSessionId, newDate);
+      }
+
+      // Notify parent to reset state
+      onSessionChangeRef.current?.(newSessionId);
+    };
+
+    // A rotation held back by a running session happens the next time the
+    // user leaves or comes back to the tab, so it never wipes the screen mid-read.
+    const handleVisibilityChange = () => {
+      if (rotationPending && !deferRotationRef.current) rotate();
+    };
+
     const scheduleMidnightRotation = () => {
       // Clear any existing timer
       if (midnightTimerRef.current) {
@@ -166,19 +198,12 @@ export const useDailySession = (
       const ms = msUntilNextMidnight();
 
       midnightTimerRef.current = setTimeout(() => {
-        const newSessionId = getTodaySessionId();
-        const newDate = getTodayDateString();
-
-        setSessionId(newSessionId);
-        setIsNewSession(true);
-
-        // Create the new session in Firestore
-        if (user) {
-          void dbService.createSession(user.uid, newSessionId, newDate);
+        // Don't wipe a focus session that is still running at midnight
+        if (deferRotationRef.current) {
+          rotationPending = true;
+        } else {
+          rotate();
         }
-
-        // Notify parent to reset state
-        onSessionChangeRef.current?.(newSessionId);
 
         // Schedule the next midnight
         scheduleMidnightRotation();
@@ -186,12 +211,14 @@ export const useDailySession = (
     };
 
     scheduleMidnightRotation();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       if (midnightTimerRef.current) {
         clearTimeout(midnightTimerRef.current);
         midnightTimerRef.current = null;
       }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [user]);
 
