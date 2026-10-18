@@ -153,8 +153,7 @@ export function extractReminderFromStaticToolCalls(
                 : undefined;
             return {
                 type: input.type,
-                // A gap longer than the session would never check in before it ends.
-                minutes: sessionMinutes ? Math.min(input.minutes, sessionMinutes) : input.minutes,
+                minutes: input.minutes,
                 sessionMinutes,
                 reason: input.reason,
             };
@@ -216,6 +215,50 @@ const DEFAULT_AUTO_REMINDER: ReminderConfig = {
     reason: 'Auto-set: AI recorded tasks but did not set a reminder',
 };
 
+const DURATION = String.raw`(\d+(?:\.\d+)?|an?)?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b`;
+// "for 2 hours", "for the next hour", "over the next 30 min", or a reply that is only a duration
+// ("about 45 minutes", answering "how long?"). Not "in 2 hours", which reads as a reminder time.
+const SESSION_PHRASES = [
+    new RegExp(String.raw`\b(?:for|(?:in|over|during)\s+the\s+next)\s+(?:the\s+next\s+)?${DURATION}`, 'i'),
+    new RegExp(String.raw`^\s*(?:about|around|like|maybe|roughly)?\s*${DURATION}\W*$`, 'i'),
+];
+const INTERVAL_PHRASES = [new RegExp(String.raw`\bevery\s+${DURATION}`, 'i')];
+
+const statedMinutes = (text: string, phrases: RegExp[]): number | undefined => {
+    for (const phrase of phrases) {
+        const match = text.match(phrase);
+        if (!match) continue;
+
+        const [whole, amount, unit] = match;
+        // "the next hour" and "every hour" mean one; "for hours" doesn't name a length.
+        if (!amount && !/\b(?:next|every)\s/i.test(whole)) continue;
+
+        const count = !amount || /^an?$/i.test(amount) ? 1 : Number(amount);
+        const minutes = /^h/i.test(unit) ? count * 60 : /^s/i.test(unit) ? count / 60 : count;
+        if (minutes > 0) return minutes;
+    }
+    return undefined;
+};
+
+/**
+ * Models sometimes skip sessionMinutes or setReminder entirely, so recurring check-ins also read
+ * durations the user typed. Each phrase fills only its own field: "every N" always sets the gap,
+ * while "for N" only fills a missing session length, since it can describe other things too.
+ */
+export function applyStatedDurations(reminder: ReminderConfig | null, userText: string): ReminderConfig | null {
+    if (reminder?.type !== 'recurring') return reminder;
+
+    const sessionMinutes = reminder.sessionMinutes ?? statedMinutes(userText, SESSION_PHRASES);
+    const minutes = statedMinutes(userText, INTERVAL_PHRASES) ?? reminder.minutes;
+
+    return {
+        ...reminder,
+        // A gap longer than the session would never check in before it ends.
+        minutes: sessionMinutes ? Math.min(minutes, sessionMinutes) : minutes,
+        sessionMinutes,
+    };
+}
+
 async function streamAssistantReplyToUI(
     result: {
         textStream: AsyncIterable<string>;
@@ -223,7 +266,8 @@ async function streamAssistantReplyToUI(
         response: PromiseLike<{ messages: Array<{ role: string; content: unknown }> }>;
         staticToolCalls: PromiseLike<Array<{ toolName: string; input?: unknown }>>;
     },
-    onChunk: StreamCallback
+    onChunk: StreamCallback,
+    userText: string
 ): Promise<{ text: string; reminder: ReminderConfig | null; taskUpdate: TaskUpdate | null }> {
     let merged = await recoverAssistantTextFromStream(result);
     let fromMessages = '';
@@ -252,6 +296,8 @@ async function streamAssistantReplyToUI(
         console.log('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
         reminder = DEFAULT_AUTO_REMINDER;
     }
+
+    reminder = applyStatedDurations(reminder, userText);
 
     const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate);
 
@@ -503,7 +549,7 @@ export const streamReply = async (
         },
     });
 
-    return streamAssistantReplyToUI(result, onChunk);
+    return streamAssistantReplyToUI(result, onChunk, history[history.length - 1]?.content ?? '');
 };
 
 export const generateCheckinMessage = async (task: string): Promise<string> => {
