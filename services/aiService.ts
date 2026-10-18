@@ -43,6 +43,11 @@ export interface AIResponse {
     taskUpdate: TaskUpdate | null;
 }
 
+// Replies and tool calls, for checking timer values in `npm run dev`. Silent in builds and tests.
+const debugLog = (...args: unknown[]) => {
+    if (import.meta.env?.DEV) console.log(...args);
+};
+
 /**
  * Cap completion length so providers (especially OpenRouter) do not reserve huge max_tokens
  * budgets against small credit balances. Focus Fairy replies are short; tool JSON is small.
@@ -290,7 +295,7 @@ async function streamAssistantReplyToUI(
         merged = fromMessages;
     }
 
-    console.log('[FocusFairy] Raw AI text:', JSON.stringify(merged));
+    debugLog('[FocusFairy] Raw AI text:', JSON.stringify(merged));
 
     for (let i = 0; i < merged.length; i++) {
         onChunk(merged.slice(0, i + 1));
@@ -298,7 +303,7 @@ async function streamAssistantReplyToUI(
     }
 
     const staticCalls = await result.staticToolCalls;
-    console.log('[FocusFairy] Tool calls:', JSON.stringify(staticCalls, null, 2));
+    debugLog('[FocusFairy] Tool calls:', JSON.stringify(staticCalls, null, 2));
 
     let reminder = extractReminderFromStaticToolCalls(staticCalls);
     const taskUpdate = extractTaskUpdateFromStaticToolCalls(staticCalls);
@@ -307,7 +312,7 @@ async function streamAssistantReplyToUI(
     // This prevents the fallback from asking more questions and looping forever.
     const aiEmittedNoText = !merged.trim() && !fromMessages.trim();
     if (aiEmittedNoText && taskUpdate && taskUpdate.tasks.length > 0 && !reminder) {
-        console.log('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
+        debugLog('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
         reminder = autoReminder(userText);
     }
 
@@ -315,7 +320,7 @@ async function streamAssistantReplyToUI(
 
     const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate);
 
-    console.log('[FocusFairy] Final response:', JSON.stringify({ replyText, reminder, taskUpdate }, null, 2));
+    debugLog('[FocusFairy] Final response:', JSON.stringify({ replyText, reminder, taskUpdate }, null, 2));
 
     return { text: replyText, reminder, taskUpdate };
 }
