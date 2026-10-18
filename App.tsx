@@ -3,7 +3,7 @@ import InitialTaskInput from './components/InitialTaskInput';
 import ChatInterface from './components/ChatInterface';
 import FocusShell from './components/FocusShell';
 import { ChatMessage, SessionTask, AIProvider, ScheduledTask } from './types';
-import { initializeChat, generateCheckinMessage, getCurrentTask, ReminderConfig, TaskUpdate, streamInitialResponse, streamContinueChat } from './services/aiService';
+import { generateCheckinMessage, ReminderConfig, TaskUpdate, streamReply, toChatHistory, SessionContext } from './services/aiService';
 import { useAuth } from './contexts/AuthContext';
 import * as dbService from './services/dbService';
 import { useDailySession, getTodayDateString } from './hooks/useDailySession';
@@ -482,7 +482,7 @@ const App: React.FC = () => {
         isGeneratingRef.current = true;
 
         try {
-            const taskForCheckin = fallbackTask || currentTaskRef.current || getCurrentTask() || '';
+            const taskForCheckin = fallbackTask || currentTaskRef.current;
             const checkinMessage = await generateCheckinMessage(taskForCheckin);
 
             // Show browser notification if permission granted
@@ -853,6 +853,12 @@ function formatTaskForCheckin(task: string): string {
         setPendingTimerRequest(null);
     }, []);
 
+    const sessionContext: SessionContext = {
+        tasks: sessionTaskState.tasks.map(sessionTask => sessionTask.title),
+        currentTask: currentTaskTitle || null,
+        timerActive: Boolean(activeTimer),
+    };
+
     const handleTaskSubmit = async (newTask: string) => {
         if (!newTask.trim()) return;
         setTask(newTask);
@@ -870,14 +876,12 @@ function formatTaskForCheckin(task: string): string {
         setStreamingComplete(false);
 
         try {
-            initializeChat();
-            
             // Stream text with callback for real-time updates
             const onChunk = (text: string) => {
                 setStreamingText(text);
             };
             
-            const { text, reminder, taskUpdate } = await streamInitialResponse(newTask, onChunk);
+            const { text, reminder, taskUpdate } = await streamReply([{ role: 'user', content: newTask }], sessionContext, onChunk);
 
             // Mark streaming as complete (keeps showing last text until we add message)
             setStreamingComplete(true);
@@ -949,7 +953,7 @@ function formatTaskForCheckin(task: string): string {
                 setStreamingText(text);
             };
             
-            const { text, reminder, taskUpdate } = await streamContinueChat(userMessage, onChunk);
+            const { text, reminder, taskUpdate } = await streamReply(toChatHistory([...messages, userMsg]), sessionContext, onChunk);
             
             // Mark streaming as complete (keeps showing last text until we add message)
             setStreamingComplete(true);

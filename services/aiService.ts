@@ -1,8 +1,8 @@
-import { generateText, streamText, LanguageModel, tool } from 'ai';
+import { generateText, streamText, type LanguageModel, tool } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
-import { AIProvider } from '../types';
+import type { AIProvider, ChatMessage } from '../types';
 
 // Streaming callback type
 export type StreamCallback = (chunk: string) => void;
@@ -12,8 +12,8 @@ interface AIConfig {
     apiKey: string;
 }
 
-interface ChatMessage {
-    role: 'user' | 'assistant' | 'system';
+export interface ChatTurn {
+    role: 'user' | 'assistant';
     content: string;
 }
 
@@ -41,10 +41,6 @@ export interface AIResponse {
     taskUpdate: TaskUpdate | null;
 }
 
-/** User-facing message when no API key is saved. Shown in chat and check-in errors. */
-export const NO_API_KEY_MESSAGE =
-    "You need an API key to use the app. Go to Settings, choose your AI provider, and paste your API key there.";
-
 /**
  * Cap completion length so providers (especially OpenRouter) do not reserve huge max_tokens
  * budgets against small credit balances. Focus Fairy replies are short; tool JSON is small.
@@ -54,7 +50,7 @@ const CHECKIN_MAX_OUTPUT_TOKENS = 256;
 
 /**
  * Streaming can yield empty text when the model calls setReminder without emitting assistant text.
- * Non-streaming callAI already falls back; this keeps chat from showing the empty-state placeholder.
+ * This keeps chat from showing the empty-state placeholder.
  */
 function ensureStreamedAssistantText(
     streamed: string,
@@ -428,35 +424,33 @@ Use this for task list memory only. Do not call it for greetings, vague messages
     inputSchema: taskToolSchema,
 });
 
-// Store conversation history
-let conversationHistory: ChatMessage[] = [];
-let currentTask: string | null = null;
-
-// Session state: tracks what's already been recorded so the AI doesn't re-call tools
-let recordedTaskTitles: string[] = [];
-let sessionTimerActive = false;
+export interface SessionContext {
+    tasks: string[];
+    currentTask: string | null;
+    timerActive: boolean;
+}
 
 /** Build the full system prompt, injecting session context if tasks are already recorded. */
-function buildSystemPrompt(): string {
+function buildSystemPrompt({ tasks, currentTask, timerActive }: SessionContext): string {
     // The model has no clock; without this it guesses scheduledDate from its training data.
     const now = new Date();
     const prompt = `${systemInstruction}
 
 Today is ${now.toDateString()} (${now.toLocaleDateString('en-CA')}). Use this to work out scheduledDate.`;
 
-    if (recordedTaskTitles.length === 0) {
+    if (tasks.length === 0) {
         return prompt;
     }
 
-    const taskList = recordedTaskTitles.map(t => `"${t}"`).join(', ');
-    const timerNote = sessionTimerActive
-        ? 'A recurring check-in timer is already running.'
+    const taskList = tasks.map(t => `"${t}"`).join(', ');
+    const timerNote = timerActive
+        ? 'A check-in timer is already running.'
         : 'No timer is set yet.';
 
     return `${prompt}
 
 **ACTIVE SESSION CONTEXT** (auto-injected — do NOT repeat this to the user):
-- Tasks already recorded: ${taskList}. Current focus: "${currentTask || recordedTaskTitles[0]}".
+- Tasks already recorded: ${taskList}. Current focus: "${currentTask || tasks[0]}".
 - ${timerNote}
 - Do NOT call recordTasks again for these existing tasks. Only call recordTasks if the user mentions a COMPLETELY NEW task.
 - Do NOT call setReminder again unless the user explicitly asks to change the timer.
@@ -465,263 +459,59 @@ Today is ${now.toDateString()} (${now.toLocaleDateString('en-CA')}). Use this to
 - If the user says they don't want to do it, gently acknowledge and ask if they want to switch tasks or take a break.`;
 }
 
-export const resetConversation = () => {
-    conversationHistory = [];
-    currentTask = null;
-    recordedTaskTitles = [];
-    sessionTimerActive = false;
-};
+/**
+ * Turn the visible chat into model history. Back-to-back messages from one side are merged
+ * (check-ins follow replies) and history starts at the first user message.
+ */
+export const toChatHistory = (messages: Pick<ChatMessage, 'sender' | 'text'>[]): ChatTurn[] => {
+    const turns: ChatTurn[] = [];
+    for (const message of messages) {
+        const role = message.sender === 'user' ? 'user' : 'assistant';
+        if (turns.length === 0 && role === 'assistant') continue;
 
-export const getCurrentTask = (): string | null => currentTask;
-
-
-// Call the AI with tool support
-const callAI = async (messages: ChatMessage[]): Promise<AIResponse> => {
-    const { provider, apiKey } = getConfig();
-    const model = getModel(provider, apiKey);
-
-    try {
-        const result = await generateText({
-            model,
-            maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-            system: systemInstruction,
-            messages: messages.map(m => ({
-                role: m.role as 'user' | 'assistant',
-                content: m.content,
-            })),
-            tools: {
-                setReminder: setReminderTool,
-                recordTasks: recordTasksTool,
-            },
-        });
-
-        const toolCalls = (result.toolCalls || []) as Array<{ toolName: string; input?: unknown }>;
-        const reminder = extractReminderFromStaticToolCalls(toolCalls);
-        const taskUpdate = extractTaskUpdateFromStaticToolCalls(toolCalls);
-
-        return {
-            text: result.text || "I'm here to help you focus! What would you like to work on?",
-            reminder,
-            taskUpdate,
-        };
-    } catch (error) {
-        // Fallback: try without tools if tool calling fails
-        try {
-            const fallbackResult = await generateText({
-                model,
-                maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-                system: systemInstruction,
-                messages: messages.map(m => ({
-                    role: m.role as 'user' | 'assistant',
-                    content: m.content,
-                })),
-            });
-
-            return {
-                text: fallbackResult.text || "I'm here to help you focus!",
-                reminder: null,
-                taskUpdate: null,
-            };
-        } catch {
-            throw error;
-        }
-    }
-};
-
-export const initializeChat = () => {
-    conversationHistory = [];
-};
-
-
-
-export const getInitialResponse = async (userInput: string): Promise<AIResponse> => {
-    // Let the AI fully determine if this is a task, greeting, or off-topic message
-    conversationHistory = [{ role: 'user', content: userInput }];
-
-    try {
-        const response = await callAI(conversationHistory);
-        conversationHistory.push({ role: 'assistant', content: response.text });
-
-        // Store the AI-selected current task for generated check-ins.
-        if (response.taskUpdate?.currentTaskTitle) {
-            currentTask = response.taskUpdate.currentTaskTitle;
-        } else if (response.reminder) {
-            currentTask = userInput;
+        const last = turns[turns.length - 1];
+        if (last?.role === role) {
+            last.content += `\n\n${message.text}`;
         } else {
-            currentTask = null;
+            turns.push({ role, content: message.text });
         }
-
-        return {
-            ...response,
-            reminder: normalizeReminderDuration(response.reminder, extractTimeFromMessage(userInput)),
-        };
-    } catch (error) {
-        const isNoApiKey = error instanceof Error && error.message.includes('No API key');
-        return {
-            text: isNoApiKey ? NO_API_KEY_MESSAGE : `I'm having trouble connecting. Go to Settings (gear icon) and check your API key, then try again.`,
-            reminder: null,
-            taskUpdate: null,
-        };
     }
+    return turns;
 };
 
-export const continueChat = async (message: string): Promise<AIResponse> => {
-    conversationHistory.push({ role: 'user', content: message });
-
-    try {
-        const response = await callAI(conversationHistory);
-        conversationHistory.push({ role: 'assistant', content: response.text });
-
-        // Update currentTask if AI detected a new current task.
-        if (response.taskUpdate?.currentTaskTitle) {
-            currentTask = response.taskUpdate.currentTaskTitle;
-        } else if (response.reminder) {
-            currentTask = message;
-        }
-
-        return {
-            ...response,
-            reminder: normalizeReminderDuration(response.reminder, extractTimeFromMessage(message)),
-        };
-    } catch (error) {
-        const isNoApiKey = error instanceof Error && error.message.includes('No API key');
-        return {
-            text: isNoApiKey ? NO_API_KEY_MESSAGE : "I'm having trouble responding right now. Let's try again in a moment.",
-            reminder: null,
-            taskUpdate: null,
-        };
-    }
-};
-
-export const streamInitialResponse = async (
-    userInput: string,
+/** Stream a reply to the full chat history. The caller owns the history, so it survives reloads. */
+export const streamReply = async (
+    history: ChatTurn[],
+    context: SessionContext,
     onChunk: StreamCallback
 ): Promise<AIResponse> => {
-    // Let the AI fully determine if this is a task, greeting, or off-topic message
-    conversationHistory = [{ role: 'user', content: userInput }];
-    // Reset session state for a fresh conversation
-    recordedTaskTitles = [];
-    sessionTimerActive = false;
-
-    console.log('[FocusFairy] === streamInitialResponse ===');
-    console.log('[FocusFairy] History sent:', JSON.stringify(conversationHistory, null, 2));
-
     const { provider, apiKey } = getConfig();
-    const model = getModel(provider, apiKey);
 
     const result = streamText({
-        model,
+        model: getModel(provider, apiKey),
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-        system: buildSystemPrompt(),
-        messages: conversationHistory.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-        })),
+        system: buildSystemPrompt(context),
+        messages: history,
         tools: {
             setReminder: setReminderTool,
             recordTasks: recordTasksTool,
         },
     });
 
-    const { text: replyText, reminder, taskUpdate } = await streamAssistantReplyToUI(
+    return streamAssistantReplyToUI(
         result,
         onChunk,
-        extractTimeFromMessage(userInput)
+        extractTimeFromMessage(history[history.length - 1]?.content ?? '')
     );
-
-    // Store in conversation history
-    conversationHistory.push({ role: 'assistant', content: replyText });
-
-    // Update session state from tool calls
-    if (taskUpdate?.tasks) {
-        recordedTaskTitles = taskUpdate.tasks.map(t => t.title);
-    }
-    if (reminder) {
-        sessionTimerActive = true;
-    }
-
-    // Store the AI-selected current task for generated check-ins.
-    if (taskUpdate?.currentTaskTitle) {
-        currentTask = taskUpdate.currentTaskTitle;
-    } else if (reminder) {
-        currentTask = userInput;
-    } else {
-        currentTask = null;
-    }
-
-    return { text: replyText, reminder, taskUpdate };
 };
 
-export const streamContinueChat = async (
-    message: string,
-    onChunk: StreamCallback
-): Promise<AIResponse> => {
-    conversationHistory.push({ role: 'user', content: message });
-
-    console.log('[FocusFairy] === streamContinueChat ===');
-    console.log('[FocusFairy] Session state:', JSON.stringify({ recordedTaskTitles, sessionTimerActive, currentTask }));
-    console.log('[FocusFairy] History sent:', JSON.stringify(conversationHistory, null, 2));
-
-    const { provider, apiKey } = getConfig();
-    const model = getModel(provider, apiKey);
-
-    const dynamicPrompt = buildSystemPrompt();
-    console.log('[FocusFairy] Session context injected:', recordedTaskTitles.length > 0 ? 'YES' : 'NO');
-
-    const result = streamText({
-        model,
-        maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
-        system: dynamicPrompt,
-        messages: conversationHistory.map(m => ({
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-        })),
-        tools: {
-            setReminder: setReminderTool,
-            recordTasks: recordTasksTool,
-        },
-    });
-
-    const { text: replyText, reminder, taskUpdate } = await streamAssistantReplyToUI(
-        result,
-        onChunk,
-        extractTimeFromMessage(message)
-    );
-
-    // Store in conversation history
-    conversationHistory.push({ role: 'assistant', content: replyText });
-
-    // Update session state from tool calls
-    if (taskUpdate?.tasks) {
-        for (const t of taskUpdate.tasks) {
-            if (!recordedTaskTitles.includes(t.title)) {
-                recordedTaskTitles.push(t.title);
-            }
-        }
-    }
-    if (reminder) {
-        sessionTimerActive = true;
-    }
-
-    // Update currentTask if AI detected a new current task.
-    if (taskUpdate?.currentTaskTitle) {
-        currentTask = taskUpdate.currentTaskTitle;
-    } else if (reminder) {
-        currentTask = message;
-    }
-
-    return { text: replyText, reminder, taskUpdate };
-};
-
-export const generateCheckinMessage = async (fallbackTask: string): Promise<string> => {
-    const taskToUse = currentTask || fallbackTask;
-
+export const generateCheckinMessage = async (task: string): Promise<string> => {
     // If no real task is set, use a generic check-in
-    if (!taskToUse) {
+    if (!task) {
         return "Hey! Just checking in. How's your focus going? ✨";
     }
 
-    const prompt = `Generate a short, friendly check-in notification (under 15 words) for someone working on: "${taskToUse}". Don't use special formatting.`;
+    const prompt = `Generate a short, friendly check-in notification (under 15 words) for someone working on: "${task}". Don't use special formatting.`;
 
     try {
         const { provider, apiKey } = getConfig();
@@ -742,7 +532,6 @@ export const generateCheckinMessage = async (fallbackTask: string): Promise<stri
     }
 };
 
-// Legacy exports for backwards compatibility (can be removed later)
 export const extractTimeFromMessage = (message: string): number | null => {
     // The AI still decides whether a reminder should exist and whether it is
     // one-time or recurring. This parser only makes an explicit duration
