@@ -44,10 +44,10 @@ export default function Background() {
         let frame = 0;
         const tick = (now: number) => {
             raf = requestAnimationFrame(tick);
-            // Clamp so a long gap (backgrounded tab, blur) can't jump the animation.
+            // Clamp so a long gap (backgrounded tab) can't jump the animation.
             const dt = Math.min(Math.max(now - last, 0), 50);
             last = now;
-            if (document.hidden || !document.hasFocus()) return;
+            if (document.hidden) return;
             pending += dt;
             if (pending >= 1000 / MAX_FPS - 2) {
                 frame += pending * SPEED;
