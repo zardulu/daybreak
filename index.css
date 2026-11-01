@@ -815,79 +815,25 @@ body {
   transform: rotate(180deg);
 }
 
-/* Desktop layout: symmetric 88px gutters. The fairy fills the left gutter, the
-   nav arrows sit centred in the right one, and the bubble, user text and input
-   row share the 374px column between them, centred under the title. The task
-   list is inset a further 32px on each side. Vertical rhythm is one 32px step:
-   card top to title, date/timer to first message, last chat item to input, and
-   input (plus its char counter) to card bottom. */
+/* Desktop alignment: the AI row, user text and input row share a 56px right
+   inset, so the bubble, the user text and the send button's outer edge line up
+   and the AI row leaves room for the nav arrows. */
 @media (min-width: 641px) {
-  .focus-card {
-    /* 12px + the 20px char counter under the input = 32px visible bottom */
-    padding: 32px 24px 12px;
-  }
-
-  .fairy-container {
-    width: 88px;
-    height: 88px;
-  }
-
-  .fairy-container img {
-    width: 88px;
-    height: 88px;
-    margin-left: 0;
-  }
-
-  .chat-view-wrapper,
-  .chat-pair-container {
-    min-height: 0;
-  }
-
-  .chat-pair-container {
-    padding-top: 32px;
-  }
-
-  .chat-pair-container > :last-child {
-    margin-bottom: 0;
-  }
-
   .ai-message-row {
-    position: relative;
-    padding-right: 88px;
-  }
-
-  /* The -24px pull-up was sized for the 120px fairy; under the 88px row it
-     would overlap the bubble. */
-  .ai-message-row + .task-list-container {
-    margin-top: 0;
+    padding-right: 56px;
   }
 
   .user-message-row,
   .input-form-container {
-    padding-left: 88px;
-    padding-right: 88px;
-  }
-
-  .input-form-container {
-    margin-top: 32px;
-  }
-
-  .task-list-container {
-    padding-left: 120px;
-    padding-right: 120px;
-  }
-
-  .chat-view-wrapper .nav-arrows {
-    top: 50%;
-    right: 36px;
+    padding-right: 56px;
   }
 }
 
-/* Nav arrows - each breakpoint block sets top/right. z-index keeps them above the
-   later task-list sections, whose fadeIn transform makes them stacking contexts. */
+/* Nav arrows - fixed position in center-right of chat view */
 .chat-view-wrapper .nav-arrows {
   position: absolute;
-  z-index: 1;
+  right: 12px;
+  top: 110px;
   transform: translateY(-50%);
 }
 

@@ -162,33 +162,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks,
                                     />
                                 </div>
                             )}
-                            {/* Navigation arrows - centred in the right gutter on desktop */}
-                            {hasUserMessages ? (
-                                <div className="nav-arrows">
-                                    <button
-                                        onClick={scrollUp}
-                                        className="nav-arrow"
-                                        aria-label="Show earlier messages"
-                                        disabled={!canScrollUp}
-                                        style={{ opacity: canScrollUp ? 1 : 0.3, cursor: canScrollUp ? 'pointer' : 'default' }}
-                                    >
-                                        <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M1 6L6 1L11 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                                        </svg>
-                                    </button>
-                                    <button
-                                        onClick={scrollDown}
-                                        className="nav-arrow"
-                                        aria-label="Show later messages"
-                                        disabled={!canScrollDown}
-                                        style={{ opacity: canScrollDown ? 1 : 0.3, cursor: canScrollDown ? 'pointer' : 'default' }}
-                                    >
-                                        <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                            <path d="M1 2L6 7L11 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                                        </svg>
-                                    </button>
-                                </div>
-                            ) : null}
                         </div>
 
                         {quickReplies.length > 0 ? (
@@ -292,6 +265,34 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks,
                         ) : null}
 
                     </div>
+
+                    {/* Navigation arrows - fixed position */}
+                    {hasUserMessages ? (
+                        <div className="nav-arrows">
+                            <button
+                                onClick={scrollUp}
+                                className="nav-arrow"
+                                aria-label="Show earlier messages"
+                                disabled={!canScrollUp}
+                                style={{ opacity: canScrollUp ? 1 : 0.3, cursor: canScrollUp ? 'pointer' : 'default' }}
+                            >
+                                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M1 6L6 1L11 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                            </button>
+                            <button
+                                onClick={scrollDown}
+                                className="nav-arrow"
+                                aria-label="Show later messages"
+                                disabled={!canScrollDown}
+                                style={{ opacity: canScrollDown ? 1 : 0.3, cursor: canScrollDown ? 'pointer' : 'default' }}
+                            >
+                                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M1 2L6 7L11 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                            </button>
+                        </div>
+                    ) : null}
                 </div>
 
                 <div className="w-full input-form-container">
