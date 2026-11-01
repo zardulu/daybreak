@@ -1114,8 +1114,9 @@ body {
   font-family: inherit;
 }
 
-/* Animated WebGL background (ported from hyperframes.dev); veil washes it toward the page cream. */
-.sr-ground { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: #fff; }
+/* Animated WebGL background (ported from hyperframes.dev); veil washes it toward the page cream.
+   Without WebGL2 the library renders nothing, so the backing falls back to the app's cream. */
+.sr-ground { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--bg-warm); }
 .sr-ground-veil { position: absolute; inset: 0; background: rgb(248 245 240 / 0.35); }
 body:has(.sr-ground) { background: none; }
 

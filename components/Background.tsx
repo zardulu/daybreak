@@ -10,6 +10,7 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 // the wrapper's uniforms, so a prop change draws twice; setFrame draws exactly once.
 // minPixelRatio is a floor: 0.5 stops the default 2x supersampling on 1x screens.
 // maxPixelCount is the hard cap on canvas pixels; lower renders softer (pixel savings are minor).
+// Under reduced motion the gradient is still shown but frozen (the loop never starts; a static frame costs no GPU).
 const SHADER = {
     colors: ['#829dd4', '#6f6acd', '#d586a6', '#9f50d3'], // blue, indigo, pink, purple
     distortion: 0.8,
@@ -61,14 +62,12 @@ export default function Background() {
 
     return (
         <div className="sr-ground" aria-hidden="true">
-            {!reducedMotion && (
-                <MeshGradient
-                    className="sr-ground-shader"
-                    style={{ width: '100%', height: '100%' }}
-                    {...SHADER}
-                    ref={mountRef}
-                />
-            )}
+            <MeshGradient
+                className="sr-ground-shader"
+                style={{ width: '100%', height: '100%' }}
+                {...SHADER}
+                ref={mountRef}
+            />
             <div className="sr-ground-veil" />
         </div>
     );
