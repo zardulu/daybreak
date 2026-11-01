@@ -249,7 +249,7 @@ body {
   max-width: 420px;
   max-height: 240px;
   overflow-y: auto;
-  /* border: 1px solid var(--accent-pink); */
+  border: 1px solid var(--accent-pink);
   box-shadow: 0 2px 4px var(--accent-pink);
 }
 
