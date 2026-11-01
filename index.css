@@ -405,6 +405,22 @@ body {
 /* The app shell stays mounted while the opening prompt becomes the first chat turn. */
 .focus-stage {
   animation: fadeIn 0.25s ease-out;
+  background: var(--bg-white);
+  border: 1px solid var(--border-light);
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.06);
+  margin-top: 20px;
+}
+
+@media (max-width: 640px) {
+  /* .focus-shell is px-0 on mobile; Tailwind's w-full (loaded last) wins on width, so cap max-width for a gutter. */
+  .focus-stage {
+    padding: 16px;
+    border-radius: 20px;
+    max-width: calc(100% - 24px);
+    margin-inline: auto;
+  }
 }
 
 /* Settings modal open animation */
@@ -1097,6 +1113,11 @@ body {
   transition: background-color 0.2s;
   font-family: inherit;
 }
+
+/* Animated WebGL background (ported from hyperframes.dev); veil washes it toward the page cream. */
+.sr-ground { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: #fff; }
+.sr-ground-veil { position: absolute; inset: 0; background: rgb(248 245 240 / 0.35); }
+body:has(.sr-ground) { background: none; }
 
 /* Tailwind comes last so its utilities win ties with the rules above, as they did when the
    Play CDN injected them after this file. */
