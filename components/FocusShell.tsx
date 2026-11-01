@@ -100,7 +100,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                 </div>
             </div>
 
-            <div className="flex flex-col items-center w-full" style={{ maxWidth: '600px' }}>
+            <div className="focus-card flex flex-col items-center w-full">
                 <h1
                     className="font-title text-3xl sm:text-4xl font-semibold italic mb-0"
                     style={{ color: 'var(--text-dark)' }}

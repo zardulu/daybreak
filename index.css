@@ -405,17 +405,21 @@ body {
 /* The app shell stays mounted while the opening prompt becomes the first chat turn. */
 .focus-stage {
   animation: fadeIn 0.25s ease-out;
+}
+
+/* White card holding the title, date, timer and chat. */
+.focus-card {
+  max-width: 600px;
   background: var(--bg-white);
   border: 1px solid var(--border-light);
   border-radius: 24px;
-  padding: 24px;
+  padding: 28px 24px 24px;
   box-shadow: 0 8px 32px rgb(0 0 0 / 0.06);
-  margin-top: 20px;
 }
 
 @media (max-width: 640px) {
   /* .focus-shell is px-0 on mobile; Tailwind's w-full (loaded last) wins on width, so cap max-width for a gutter. */
-  .focus-stage {
+  .focus-card {
     padding: 16px;
     border-radius: 20px;
     max-width: calc(100% - 24px);
