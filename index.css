@@ -290,7 +290,7 @@ body {
 }
 
 .input-form-container {
-  padding-left: 140px;
+  padding-left: 120px;
 }
 
 /* Dark button */
@@ -635,8 +635,8 @@ body {
 
 /* Fairy container - same background as page */
 .fairy-container {
-  width: 140px;
-  height: 140px;
+  width: 120px;
+  height: 120px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -646,10 +646,10 @@ body {
 }
 
 .fairy-container img {
-  width: 150px;
-  height: 150px;
+  width: 130px;
+  height: 130px;
   object-fit: contain;
-  margin-left: -20px;
+  margin-left: -14px;
   /* Offset to not push bubble */
 }
 
@@ -691,7 +691,7 @@ body {
 .chat-view-wrapper {
   position: relative;
   width: 100%;
-  min-height: 280px;
+  min-height: 220px;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -703,9 +703,9 @@ body {
   flex-direction: column;
   gap: 8px;
   width: 100%;
-  min-height: 280px;
+  min-height: 220px;
   justify-content: flex-start;
-  padding-top: 44px;
+  padding-top: 24px;
 }
 
 /* User message row - plain text at top, aligned with input bounds */
@@ -713,7 +713,7 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
-  padding-left: 140px;
+  padding-left: 120px;
   padding-right: 40px;
   margin-bottom: 8px;
 }
@@ -738,7 +738,7 @@ body {
 }
 
 .task-list-container {
-  padding-left: 172px;
+  padding-left: 152px;
   padding-right: 88px;
   margin-top: -24px;
   margin-bottom: 16px;
@@ -815,11 +815,16 @@ body {
   transform: rotate(180deg);
 }
 
-/* Desktop alignment: reserve space on the right of the AI row equal to the send
-   button (44px) + form gap (12px) so the bubble's right edge aligns with the
-   input field's right edge (matching the left-edge alignment). */
+/* Desktop alignment: the AI row, user text and input row share a 56px right
+   inset, so the bubble, the user text and the send button's outer edge line up
+   and the AI row leaves room for the nav arrows. */
 @media (min-width: 641px) {
   .ai-message-row {
+    padding-right: 56px;
+  }
+
+  .user-message-row,
+  .input-form-container {
     padding-right: 56px;
   }
 }
@@ -828,7 +833,7 @@ body {
 .chat-view-wrapper .nav-arrows {
   position: absolute;
   right: 12px;
-  top: 140px;
+  top: 110px;
   transform: translateY(-50%);
 }
 
