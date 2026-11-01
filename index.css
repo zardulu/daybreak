@@ -819,26 +819,51 @@ body {
   transform: rotate(180deg);
 }
 
-/* Desktop alignment: the AI row, user text and input row share a 56px right
-   inset, so the bubble, the user text and the send button's outer edge line up
-   and the AI row leaves room for the nav arrows. */
-@media (min-width: 641px) {
-  .ai-message-row {
-    padding-right: 56px;
-  }
-
-  .user-message-row,
-  .input-form-container {
-    padding-right: 56px;
-  }
-}
-
 /* Nav arrows - fixed position in center-right of chat view */
 .chat-view-wrapper .nav-arrows {
   position: absolute;
   right: 12px;
   top: 110px;
   transform: translateY(-50%);
+}
+
+/* Desktop alignment: the AI row, user text and input row share an 80px right
+   inset, so the bubble, the user text and the send button's outer edge line up
+   and the AI row leaves room for the nav arrows. The fairy column is 96px. */
+@media (min-width: 641px) {
+  .fairy-container {
+    width: 96px;
+    justify-content: flex-start;
+  }
+
+  /* 120x130 box starting 7px left of the column, overflowing it to the
+     right. max-width overrides Tailwind preflight's 100%, which would
+     squash it to 96px. */
+  .fairy-container img {
+    flex-shrink: 0;
+    width: 120px;
+    max-width: none;
+    margin-left: -7px;
+  }
+
+  .ai-message-row {
+    padding-right: 80px;
+  }
+
+  .user-message-row,
+  .input-form-container {
+    padding-left: 96px;
+    padding-right: 80px;
+  }
+
+  .task-list-container {
+    padding-left: 128px;
+    padding-right: 112px;
+  }
+
+  .chat-view-wrapper .nav-arrows {
+    right: 36px;
+  }
 }
 
 /* Slide up animation for user message */
