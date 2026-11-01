@@ -940,16 +940,23 @@ body {
     line-height: 1.5;
   }
 
-  /* Adjust nav arrows - align with button center */
+  /* Centre the nav arrows over the send button */
   .chat-view-wrapper .nav-arrows {
-    right: 32px;
-    /* 20px padding + 20px (half button) - 10px (approx half arrows) */
+    right: 37px;
+    /* 24px form gutter + 20px (half button) - 7px (half arrows) */
     top: 100px;
   }
 
   /* Reduce gap between fairy and bubble on mobile */
   .ai-message-row {
     margin-left: -6px;
+  }
+
+  /* Chat bubble ends on the input field's right edge (24px form gutter + 44px
+     input centring offset), the same column as the user text, clear of the
+     nav arrows. */
+  .chat-focus-stage .ai-message-row {
+    padding-right: 68px;
   }
 
   .task-list-container {
@@ -989,8 +996,7 @@ body {
 
   /* InitialTaskInput - reserve space on the right of the AI row equal to the
      send button (40px) + form gap (8px) on mobile so the intro bubble's right
-     edge aligns with the input field's right edge. ChatInterface bubbles on
-     mobile are intentionally left untouched. */
+     edge aligns with the input field's right edge. */
   .initial-chat-view .ai-message-row {
     padding-right: 48px;
   }
