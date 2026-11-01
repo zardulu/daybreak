@@ -9,7 +9,7 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 // ref at MAX_FPS, advancing it by SPEED per real ms. Not a `frame` prop: each re-render also rebuilds
 // the wrapper's uniforms, so a prop change draws twice; setFrame draws exactly once.
 // minPixelRatio is a floor: 0.5 stops the default 2x supersampling on 1x screens.
-// maxPixelCount caps canvas pixels. The grain needs resolution to read as grain rather than blocks; 1280x720 measured ~18% GPU on an M1 vs ~60% at full Retina resolution.
+// Rendered at device resolution so the grain stays fine (library default pixel cap). Measured ~60% GPU on an M1 at 4096x1968; set maxPixelCount (e.g. 1280 * 720, ~18%) to trade grain detail for GPU.
 // Under reduced motion the gradient is still shown but frozen (the loop never starts; a static frame costs no GPU).
 const SHADER = {
     colors: ['#7300ff', '#eba8ff', '#00bfff', '#2a00ff'], // violet, lilac, sky, indigo
@@ -20,7 +20,6 @@ const SHADER = {
     shape: 'corners' as const,
     speed: 0,
     minPixelRatio: 0.5,
-    maxPixelCount: 1280 * 720,
     // Opaque canvas skips per-frame alpha compositing of the full window, measured as the dominant GPU cost.
     webGlContextAttributes: { alpha: false },
 };
