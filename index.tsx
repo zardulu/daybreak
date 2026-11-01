@@ -2,6 +2,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import Background from './components/Background';
 import './firebase.config';
 import { AuthProvider } from './contexts/AuthContext';
 
@@ -17,6 +18,7 @@ const root = ReactDOM.createRoot(rootElement);
 root.render(
     <React.StrictMode>
         <AuthProvider>
+            <Background />
             <App />
         </AuthProvider>
     </React.StrictMode>

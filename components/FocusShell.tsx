@@ -52,7 +52,6 @@ const FocusShell: React.FC<FocusShellProps> = ({
     return (
         <div
             className="focus-shell min-h-screen w-full flex flex-col items-center justify-center px-0 py-4 sm:p-4 relative"
-            style={{ backgroundColor: 'var(--bg-warm)' }}
         >
             {/* Shared app chrome stays mounted while the conversation starts. */}
             <div className="absolute top-4 right-4 sm:top-6 sm:right-6 flex items-center gap-2 sm:gap-3">
@@ -101,7 +100,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                 </div>
             </div>
 
-            <div className="flex flex-col items-center w-full" style={{ maxWidth: '600px' }}>
+            <div className="focus-card flex flex-col items-center w-full">
                 <h1
                     className="font-title text-3xl sm:text-4xl font-semibold italic mb-0"
                     style={{ color: 'var(--text-dark)' }}

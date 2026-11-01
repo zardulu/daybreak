@@ -295,7 +295,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks,
                     ) : null}
                 </div>
 
-                <div className="w-full input-form-container" style={{ paddingLeft: '140px' }}>
+                <div className="w-full input-form-container">
                     <form
                         onSubmit={handleSendMessage}
                         className="flex items-center gap-2 sm:gap-3 w-full"
