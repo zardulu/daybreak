@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { MeshGradient, type PaperShaderElement } from '@paper-design/shaders-react';
+import { GrainGradient, type PaperShaderElement } from '@paper-design/shaders-react';
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
@@ -9,19 +9,22 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 // ref at MAX_FPS, advancing it by SPEED per real ms. Not a `frame` prop: each re-render also rebuilds
 // the wrapper's uniforms, so a prop change draws twice; setFrame draws exactly once.
 // minPixelRatio is a floor: 0.5 stops the default 2x supersampling on 1x screens.
-// maxPixelCount is the hard cap on canvas pixels; lower renders softer (pixel savings are minor).
+// maxPixelCount caps canvas pixels. The grain needs resolution to read as grain rather than blocks; 1280x720 measured ~18% GPU on an M1 vs ~60% at full Retina resolution.
 // Under reduced motion the gradient is still shown but frozen (the loop never starts; a static frame costs no GPU).
 const SHADER = {
-    colors: ['#829dd4', '#6f6acd', '#d586a6', '#9f50d3'], // blue, indigo, pink, purple
-    distortion: 0.8,
-    swirl: 0.55,
+    colors: ['#7300ff', '#eba8ff', '#00bfff', '#2a00ff'], // violet, lilac, sky, indigo
+    colorBack: '#f6e0e0',
+    softness: 0.5,
+    intensity: 1,
+    noise: 0.25,
+    shape: 'corners' as const,
     speed: 0,
     minPixelRatio: 0.5,
-    maxPixelCount: 640 * 400,
+    maxPixelCount: 1280 * 720,
     // Opaque canvas skips per-frame alpha compositing of the full window, measured as the dominant GPU cost.
     webGlContextAttributes: { alpha: false },
 };
-const SPEED = 0.2;
+const SPEED = 0.4;
 const MAX_FPS = 30;
 
 const subscribeReducedMotion = (onChange: () => void) => {
@@ -62,7 +65,7 @@ export default function Background() {
 
     return (
         <div className="sr-ground" aria-hidden="true">
-            <MeshGradient
+            <GrainGradient
                 className="sr-ground-shader"
                 style={{ width: '100%', height: '100%' }}
                 {...SHADER}
