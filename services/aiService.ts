@@ -52,7 +52,7 @@ const debugLog = (...args: unknown[]) => {
 
 /**
  * Cap completion length so providers (especially OpenRouter) do not reserve huge max_tokens
- * budgets against small credit balances. Focus Fairy replies are short; tool JSON is small.
+ * budgets against small credit balances. Daybreak replies are short; tool JSON is small.
  */
 const CHAT_MAX_OUTPUT_TOKENS = 2048;
 const CHECKIN_MAX_OUTPUT_TOKENS = 256;
@@ -81,22 +81,22 @@ function ensureStreamedAssistantText(
         const plan = reminder.type === 'one-time'
             ? `I'll remind you in ${timeDisplay}`
             : `I'll check in every ${timeDisplay} to keep you on track`;
-        return `Alright, let's lock in on "${taskName}"! ${plan} ✨`;
+        return `Alright, let's lock in on "${taskName}"! ${plan}.`;
     }
     if (reminder) {
-        return "Let's do this! I'll check in to keep you on track. You've got this ✨";
+        return "Let's do this! I'll check in to keep you on track. You've got this!";
     }
     if (completedTasks.length > 0) {
-        return `Nice work finishing "${completedTasks[0]}"! ✨`;
+        return `Nice work finishing "${completedTasks[0]}"!`;
     }
     if (stopReminder) {
-        return "Okay, no more check-ins for now. Nice work ✨";
+        return "Okay, no more check-ins for now. Nice work!";
     }
     if (taskUpdate && taskUpdate.tasks.length > 0) {
         const taskName = taskUpdate.currentTaskTitle || taskUpdate.tasks[0].title;
-        return `Alright, let's get going on "${taskName}"! I'll check in every 25 min to keep you on track ✨`;
+        return `Alright, let's get going on "${taskName}"! I'll check in every 25 min to keep you on track.`;
     }
-    return "Hey! What would you like to focus on today? ✨";
+    return "Hey! What would you like to focus on today?";
 }
 
 /**
@@ -306,13 +306,13 @@ export async function streamAssistantReplyToUI(
         merged = fromMessages;
     }
 
-    debugLog('[FocusFairy] Raw AI text:', JSON.stringify(merged));
+    debugLog('[Daybreak] Raw AI text:', JSON.stringify(merged));
 
     // Text recovered after the stream (no deltas arrived) shows all at once.
     onChunk(merged);
 
     const staticCalls = await result.staticToolCalls;
-    debugLog('[FocusFairy] Tool calls:', JSON.stringify(staticCalls, null, 2));
+    debugLog('[Daybreak] Tool calls:', JSON.stringify(staticCalls, null, 2));
 
     let reminder = extractReminderFromStaticToolCalls(staticCalls);
     const taskUpdate = extractTaskUpdateFromStaticToolCalls(staticCalls);
@@ -326,7 +326,7 @@ export async function streamAssistantReplyToUI(
     // This prevents the fallback from asking more questions and looping forever.
     const aiEmittedNoText = !merged.trim() && !fromMessages.trim();
     if (aiEmittedNoText && taskUpdate && taskUpdate.tasks.length > 0 && !reminder) {
-        debugLog('[FocusFairy] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
+        debugLog('[Daybreak] Auto-injecting default reminder (AI recorded tasks but forgot setReminder)');
         reminder = autoReminder(userText);
     }
 
@@ -334,12 +334,12 @@ export async function streamAssistantReplyToUI(
 
     const replyText = ensureStreamedAssistantText(merged, fromMessages, reminder, taskUpdate, completedTasks, stopReminder);
 
-    debugLog('[FocusFairy] Final response:', JSON.stringify({ replyText, reminder, taskUpdate, completedTasks, stopReminder }, null, 2));
+    debugLog('[Daybreak] Final response:', JSON.stringify({ replyText, reminder, taskUpdate, completedTasks, stopReminder }, null, 2));
 
     return { text: replyText, reminder, taskUpdate, completedTasks, stopReminder };
 }
 
-const systemInstruction = `You are Focus Fairy, a gentle and playful assistant that helps users stay focused on their tasks.
+const systemInstruction = `You are Daybreak, a warm, encouraging focus assistant that helps users stay focused on their tasks.
 
 **RULES**:
 - Keep normal responses under 30 words. When asking follow-up questions or offering a task breakdown, you may use up to 50 words.
@@ -347,7 +347,7 @@ const systemInstruction = `You are Focus Fairy, a gentle and playful assistant t
 - Your ONLY job is to help the user focus on a task they want to work on.
 
 **HANDLING MESSAGES**:
-- GREETING: If they just say hi, hello, hey, or any greeting (even if they address you by name like "hi focus fairy"), warmly ask what they'd like to focus on today. Do NOT set a reminder or record tasks.
+- GREETING: If they just say hi, hello, hey, or any greeting (even if they address you by name like "hi daybreak"), warmly ask what they'd like to focus on today. Do NOT set a reminder or record tasks.
 - OFF-TOPIC: If they ask a question or talk about something unrelated to focusing, briefly acknowledge it with a light comment, then ask what task they'd like to focus on. Do NOT set a reminder or record tasks.
 - TASK (see TASK INTAKE FLOW below)
 
@@ -471,7 +471,7 @@ const getModel = async (provider: AIProvider, apiKey: string): Promise<LanguageM
                 headers: {
                     Authorization: `Bearer ${apiKey}`,
                     'HTTP-Referer': referer,
-                    'X-OpenRouter-Title': 'Focus Fairy',
+                    'X-OpenRouter-Title': 'Daybreak',
                 },
             });
             return openrouter.chat('openai/gpt-5.4-mini');
@@ -628,10 +628,10 @@ export const streamReply = async (
 
 /** A check-in for a running timer, or a wrap-up once a timed session is over. */
 export const generateCheckinMessage = async (task: string, sessionEnded = false): Promise<string> => {
-    const wrapUp = "That's a wrap on this session! How did it go? ✨";
+    const wrapUp = "That's a wrap on this session! How did it go?";
     // If no real task is set, use a generic check-in
     if (!task) {
-        return sessionEnded ? wrapUp : "Hey! Just checking in. How's your focus going? ✨";
+        return sessionEnded ? wrapUp : "Hey! Just checking in. How's your focus going?";
     }
 
     const prompt = sessionEnded
@@ -648,11 +648,11 @@ export const generateCheckinMessage = async (task: string, sessionEnded = false)
             messages: [{ role: 'user', content: prompt }],
         });
 
-        return result.text || (sessionEnded ? wrapUp : "Just checking in! How's your progress? ✨");
+        return result.text || (sessionEnded ? wrapUp : "Just checking in! How's your progress?");
     } catch (error) {
         if (error instanceof Error && error.message.includes('No API key')) {
             throw error;
         }
-        return sessionEnded ? wrapUp : `How's your progress going? Keep it up! ✨`;
+        return sessionEnded ? wrapUp : `How's your progress going? Keep it up!`;
     }
 };

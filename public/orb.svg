@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <!-- Glow eases out as 0.45*(1-t)^2 from just inside the body edge to the canvas edge -->
+    <radialGradient id="orbGlow">
+      <stop offset="0.42" stop-color="#FF8A1F" stop-opacity="0.45"/>
+      <stop offset="0.484" stop-color="#FF8A1F" stop-opacity="0.356"/>
+      <stop offset="0.549" stop-color="#FF8A1F" stop-opacity="0.272"/>
+      <stop offset="0.613" stop-color="#FF8A1F" stop-opacity="0.2"/>
+      <stop offset="0.678" stop-color="#FF8A1F" stop-opacity="0.139"/>
+      <stop offset="0.742" stop-color="#FF8A1F" stop-opacity="0.089"/>
+      <stop offset="0.807" stop-color="#FF8A1F" stop-opacity="0.05"/>
+      <stop offset="0.871" stop-color="#FF8A1F" stop-opacity="0.022"/>
+      <stop offset="0.936" stop-color="#FF8A1F" stop-opacity="0.006"/>
+      <stop offset="1" stop-color="#FF8A1F" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="orbBody" fx="0.35" fy="0.3">
+      <stop offset="0" stop-color="#FFF3D9"/>
+      <stop offset="0.3" stop-color="#FFB547"/>
+      <stop offset="0.7" stop-color="#FF7A1A"/>
+      <stop offset="1" stop-color="#D9431A"/>
+    </radialGradient>
+  </defs>
+  <circle cx="50" cy="50" r="48" fill="url(#orbGlow)"/>
+  <circle cx="50" cy="50" r="21" fill="url(#orbBody)"/>
+</svg>

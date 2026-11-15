@@ -14,7 +14,7 @@ const InitialTaskInput: React.FC<InitialTaskInputProps> = ({ onTaskSubmit, isLoa
 
     // Character limit for input
     const MAX_INPUT_CHARS = 280;
-    const INTRO_MESSAGE = "Hi! I'm Focus Fairy! I'll help you focus on your daily tasks and check in on your progress. What tasks would you like to focus on today?.";
+    const INTRO_MESSAGE = "Hi! I'm Daybreak. I'll help you focus on your daily tasks and check in on your progress. What tasks would you like to focus on today?";
     const PLACEHOLDER_TEXT = "What should we focus on today?";
 
     useEffect(() => {
@@ -53,17 +53,17 @@ const InitialTaskInput: React.FC<InitialTaskInputProps> = ({ onTaskSubmit, isLoa
         <div className="focus-stage initial-focus-stage w-full">
             <div className="chat-view-wrapper initial-chat-view w-full mb-0">
                     <div className="chat-pair-container">
-                        {/* AI Message - with fairy and bubble */}
+                        {/* AI Message - with orb and bubble */}
                         <div className="ai-message-row">
-                            <div className={`fairy-container animate-float flex-shrink-0${isInitializing || isLoading ? ' fairy-thinking' : ''}`}>
-                                <img src="/fairy.svg" alt="Focus Fairy" />
+                            <div className={`orb-container animate-float flex-shrink-0${isInitializing || isLoading ? ' orb-thinking' : ''}`}>
+                                <img src="/orb.svg" alt="Daybreak" />
                             </div>
                             {isInitializing ? (
-                                <div className="sparkle-loading-wrapper animate-fadeIn flex-1 min-w-0">
-                                    <div className="sparkle-loading" aria-label="Loading..." role="status">
-                                        <span className="sparkle sparkle-large">✦</span>
-                                        <span className="sparkle sparkle-small">✦</span>
-                                        <span className="sparkle sparkle-medium">✦</span>
+                                <div className="thinking-loading-wrapper animate-fadeIn flex-1 min-w-0">
+                                    <div className="thinking-loading" aria-label="Loading..." role="status">
+                                        <span className="thinking-dot" />
+                                        <span className="thinking-dot" />
+                                        <span className="thinking-dot" />
                                     </div>
                                 </div>
                             ) : (

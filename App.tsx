@@ -114,7 +114,7 @@ const App: React.FC = () => {
 
             // Show browser notification if permission granted
             if (canNotify()) {
-                showNotification(sessionEnded ? 'Focus session complete 🎉' : 'Focus Fairy Check-in ✨', checkinMessage)
+                showNotification(sessionEnded ? 'Focus session complete 🎉' : 'Daybreak check-in', checkinMessage)
                     .catch(() => { /* the check-in still lands in chat */ });
             }
 
@@ -456,8 +456,8 @@ const App: React.FC = () => {
         return false;
     };
 
-    // Stream the fairy's reply, then record tasks and start any timer it asked for.
-    const sendToFairy = async (userText: string, history: ChatTurn[]) => {
+    // Stream the assistant's reply, then record tasks and start any timer it asked for.
+    const sendToAssistant = async (userText: string, history: ChatTurn[]) => {
         setIsLoading(true);
         setStreamingText('');
         setStreamingComplete(false);
@@ -515,7 +515,7 @@ const App: React.FC = () => {
             void dbService.saveChatState(user.uid, sessionId, { task: newTask, currentTaskId: null });
         }
 
-        await sendToFairy(newTask, [{ role: 'user', content: newTask }]);
+        await sendToAssistant(newTask, [{ role: 'user', content: newTask }]);
     };
 
     const handleSendMessage = async (userMessage: string) => {
@@ -528,7 +528,7 @@ const App: React.FC = () => {
             void dbService.saveMessage(user.uid, sessionId, userMsg);
         }
 
-        await sendToFairy(userMessage, toChatHistory([...messages, userMsg]));
+        await sendToAssistant(userMessage, toChatHistory([...messages, userMsg]));
     };
 
     return (

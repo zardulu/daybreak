@@ -72,7 +72,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                             color: 'var(--text-muted)',
                             backgroundColor: 'white'
                         }}
-                        aria-label="About Focus Fairy"
+                        aria-label="About Daybreak"
                     >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
@@ -88,7 +88,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                         }}
                     >
                         <h3 className="font-semibold text-sm mb-2" style={{ color: 'var(--text-dark)' }}>
-                            About Focus Fairy
+                            About Daybreak
                         </h3>
                         <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
                             A gentle focus companion that helps you focus on your tasks by checking in on your progress.
@@ -105,7 +105,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                     className="font-title text-3xl sm:text-4xl font-semibold italic mb-0"
                     style={{ color: 'var(--text-dark)' }}
                 >
-                    Focus Fairy ✨
+                    Daybreak
                 </h1>
                 {displayDate && (
                     <p
