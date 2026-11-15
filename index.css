@@ -556,7 +556,7 @@ body {
   animation-delay: 0.4s;
 }
 
-@keyframes sparkleFloat {
+@keyframes thinkingFloat {
 
   0%,
   100% {
@@ -570,44 +570,34 @@ body {
   }
 }
 
-.sparkle-loading-wrapper {
+.thinking-loading-wrapper {
   display: flex;
   align-items: center;
   min-height: 70px;
   padding-left: 16px;
 }
 
-.sparkle-loading {
-  position: relative;
+.thinking-loading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 32px;
   height: 24px;
 }
 
-.sparkle {
-  position: absolute;
-  color: #F2C94C;
-  line-height: 1;
-  animation: sparkleFloat 1.8s ease-in-out infinite;
-  text-shadow: 0 0 12px rgba(242, 201, 76, 0.45);
+.thinking-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: thinkingFloat 1.8s ease-in-out infinite;
 }
 
-.sparkle-large {
-  left: 0;
-  top: 8px;
-  font-size: 18px;
-}
-
-.sparkle-small {
-  left: 11px;
-  top: 0;
-  font-size: 10px;
+.thinking-dot:nth-child(2) {
   animation-delay: 0.3s;
 }
 
-.sparkle-medium {
-  right: 0;
-  top: 9px;
-  font-size: 14px;
+.thinking-dot:nth-child(3) {
   animation-delay: 0.6s;
 }
 
@@ -637,8 +627,8 @@ body {
   color: var(--text-dark);
 }
 
-/* Fairy container - same background as page */
-.fairy-container {
+/* Orb container - same background as page */
+.orb-container {
   width: 120px;
   height: 120px;
   display: flex;
@@ -649,7 +639,7 @@ body {
   overflow: visible;
 }
 
-.fairy-container img {
+.orb-container img {
   width: 130px;
   height: 130px;
   object-fit: contain;
@@ -657,31 +647,23 @@ body {
   /* Offset to not push bubble */
 }
 
-/* Fairy reacts while thinking — extra bounce + sparkle glow */
-@keyframes fairyThinking {
+/* Orb reacts while thinking — gentle pulse + orange glow */
+@keyframes orbThinking {
 
   0%,
   100% {
-    transform: translateY(0) rotate(0deg);
-    filter: drop-shadow(0 0 0 rgba(242, 201, 76, 0));
-  }
-
-  25% {
-    transform: translateY(-10px) rotate(-4deg);
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(255, 138, 31, 0));
   }
 
   50% {
-    transform: translateY(0) rotate(0deg);
-    filter: drop-shadow(0 0 14px rgba(242, 201, 76, 0.55));
-  }
-
-  75% {
-    transform: translateY(-10px) rotate(4deg);
+    transform: scale(1.06);
+    filter: drop-shadow(0 0 14px rgba(255, 138, 31, 0.55));
   }
 }
 
-.fairy-thinking img {
-  animation: fairyThinking 1.6s ease-in-out infinite;
+.orb-thinking img {
+  animation: orbThinking 1.6s ease-in-out infinite;
 }
 
 /* Response text area */
@@ -734,7 +716,7 @@ body {
   overflow-y: auto;
 }
 
-/* AI message row - with fairy, bubble, and arrows */
+/* AI message row - with orb, bubble, and arrows */
 .ai-message-row {
   display: flex;
   align-items: center;
@@ -829,9 +811,9 @@ body {
 
 /* Desktop alignment: the AI row, user text and input row share an 80px right
    inset, so the bubble, the user text and the send button's outer edge line up
-   and the AI row leaves room for the nav arrows. The fairy column is 96px. */
+   and the AI row leaves room for the nav arrows. The orb column is 96px. */
 @media (min-width: 641px) {
-  .fairy-container {
+  .orb-container {
     width: 96px;
     justify-content: flex-start;
   }
@@ -839,7 +821,7 @@ body {
   /* 120x130 box starting 7px left of the column, overflowing it to the
      right. max-width overrides Tailwind preflight's 100%, which would
      squash it to 96px. */
-  .fairy-container img {
+  .orb-container img {
     flex-shrink: 0;
     width: 120px;
     max-width: none;
@@ -910,13 +892,13 @@ body {
 /* Mobile Responsive Styles */
 @media (max-width: 640px) {
 
-  /* Smaller fairy on mobile */
-  .fairy-container {
+  /* Smaller orb on mobile */
+  .orb-container {
     width: 70px;
     height: 70px;
   }
 
-  .fairy-container img {
+  .orb-container img {
     width: 80px;
     height: 80px;
     margin-left: -8px;
@@ -926,11 +908,11 @@ body {
   .speech-bubble-ai {
     padding: 12px 16px;
     max-width: calc(100vw - 160px);
-    /* Account for fairy, padding, and button area */
+    /* Account for orb, padding, and button area */
     min-width: 0;
   }
 
-  .sparkle-loading-wrapper {
+  .thinking-loading-wrapper {
     min-height: 48px;
     padding-left: 10px;
   }
@@ -947,7 +929,7 @@ body {
     top: 100px;
   }
 
-  /* Reduce gap between fairy and bubble on mobile */
+  /* Reduce gap between orb and bubble on mobile */
   .ai-message-row {
     margin-left: -6px;
   }
@@ -968,7 +950,7 @@ body {
     max-width: calc(100vw - 192px);
   }
 
-  /* The shorter fairy row here leaves no room under the bubble for the full pull-up */
+  /* The shorter orb row here leaves no room under the bubble for the full pull-up */
   .quick-replies {
     margin-top: -12px;
   }
@@ -1080,12 +1062,12 @@ body {
 
 /* Extra small screens */
 @media (max-width: 380px) {
-  .fairy-container {
+  .orb-container {
     width: 60px;
     height: 60px;
   }
 
-  .fairy-container img {
+  .orb-container img {
     width: 70px;
     height: 70px;
   }

@@ -72,11 +72,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks,
     const canScrollUp = viewOffset > -(turns.length - 1);
     const canScrollDown = viewOffset < 0;
 
-    const AISparkleIndicator = () => (
-        <div className="sparkle-loading" aria-label="Focus Fairy is thinking" role="status">
-            <span className="sparkle sparkle-large">✦</span>
-            <span className="sparkle sparkle-small">✦</span>
-            <span className="sparkle sparkle-medium">✦</span>
+    const ThinkingIndicator = () => (
+        <div className="thinking-loading" aria-label="Daybreak is thinking" role="status">
+            <span className="thinking-dot" />
+            <span className="thinking-dot" />
+            <span className="thinking-dot" />
         </div>
     );
 
@@ -108,7 +108,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks,
 
     const displayedAiText = showLiveAiText
         ? streamingText
-        : aiMessage?.text || "Hi! I'm here to help you stay focused ✨ Tell me what you're working on, and I'll guide you through it step by step.";
+        : aiMessage?.text || "Hi! I'm here to help you stay focused. Tell me what you're working on, and I'll guide you through it step by step.";
 
     const showStreamParticles =
         isLoading && streamingText.length > 0 && !streamingComplete;
@@ -143,14 +143,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks,
                             </div>
                         ) : null}
 
-                        {/* AI Message at Bottom - with fairy and bubble */}
+                        {/* AI Message at Bottom - with orb and bubble */}
                         <div className="ai-message-row gap-0 sm:gap-0">
-                            <div className={`fairy-container animate-float flex-shrink-0${isLoading ? ' fairy-thinking' : ''}`}>
-                                <img src="/fairy.svg" alt="Focus Fairy" />
+                            <div className={`orb-container animate-float flex-shrink-0${isLoading ? ' orb-thinking' : ''}`}>
+                                <img src="/orb.svg" alt="Daybreak" />
                             </div>
                             {waitingForLatestAiResponse ? (
-                                <div className="sparkle-loading-wrapper animate-fadeIn flex-1 min-w-0">
-                                    <AISparkleIndicator />
+                                <div className="thinking-loading-wrapper animate-fadeIn flex-1 min-w-0">
+                                    <ThinkingIndicator />
                                 </div>
                             ) : (
                                 <div className="speech-bubble-ai animate-fadeIn custom-scrollbar flex-1 min-w-0">
@@ -304,7 +304,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ task, currentTask, tasks,
                             type="text"
                             value={inputMessage}
                             onChange={handleInputChange}
-                            placeholder="Reply to your fairy…"
+                            placeholder="Reply to Daybreak…"
                             className="input-field flex-1"
                             disabled={isLoading}
                         />
