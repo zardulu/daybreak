@@ -94,7 +94,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                             A gentle focus companion that helps you focus on your tasks by checking in on your progress.
                             <strong> Bring your own API key</strong> (Gemini, OpenAI, etc).
                             {user ? ' Your chat history and AI provider settings are synced to your account.' : ' Chats are ephemeral. Sign in to save your history and settings across devices.'}
-                            Keep this tab open for reliable check-in notifications.
+                            {' '}Keep this tab open for reliable check-in notifications.
                         </p>
                     </div>
                 </div>

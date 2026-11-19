@@ -49,6 +49,11 @@
   accent-color: var(--text-muted);
 }
 
+/* A hint, not content: about 3.5:1 on the card, matching light's #888 on white. */
+:root[data-theme="dark"] .input-field::placeholder {
+  color: #736E67;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
