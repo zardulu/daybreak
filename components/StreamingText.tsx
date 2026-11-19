@@ -62,6 +62,8 @@ function StreamingSandCanvas({
         if (!canvas) return;
         const ctx = canvas.getContext('2d', { alpha: true });
         if (!ctx) return;
+        // CSS can't reach canvas pixels, so the dark particles take the theme's --sand via the canvas's color.
+        const ink = getComputedStyle(canvas).color;
 
         const resize = () => {
             const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -130,9 +132,11 @@ function StreamingSandCanvas({
                 const r = p.size * (0.32 + 0.68 * fade);
 
                 if (p.kind === 'dark') {
-                    ctx.fillStyle = `rgba(26,24,22,${fade * 0.78})`;
+                    ctx.fillStyle = ink;
+                    ctx.globalAlpha = fade * 0.78;
                 } else {
-                    ctx.fillStyle = `rgba(230,190,95,${fade * 0.55})`;
+                    ctx.fillStyle = 'rgb(230,190,95)';
+                    ctx.globalAlpha = fade * 0.55;
                 }
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, Math.max(0.22, r), 0, Math.PI * 2);

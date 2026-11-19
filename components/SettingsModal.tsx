@@ -3,6 +3,7 @@ import { AIProvider } from '../types';
 import { loadLocalSettings, saveLocalSettings } from '../services/aiService';
 import { useAuth } from '../contexts/AuthContext';
 import * as dbService from '../services/dbService';
+import { getThemePreference, setThemePreference, type ThemePreference } from '../theme';
 
 const PROVIDERS: { id: AIProvider; name: string }[] = [
     { id: 'gemini', name: 'Gemini' },
@@ -11,16 +12,29 @@ const PROVIDERS: { id: AIProvider; name: string }[] = [
     { id: 'groq', name: 'Groq' },
 ];
 
+const THEMES: { id: ThemePreference; name: string }[] = [
+    { id: 'light', name: 'Light' },
+    { id: 'dark', name: 'Dark' },
+    { id: 'system', name: 'System' },
+];
+
 interface SettingsModalProps {
     onClose: () => void;
 }
 
-// Edits are a draft until saved: closing any other way leaves the stored settings untouched.
+// Provider and key edits are a draft until saved: closing any other way leaves them untouched.
+// Appearance is the exception: it applies and persists on click, because Save needs an API key.
 const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     const { user } = useAuth();
     const [saved] = useState(loadLocalSettings);
     const [selectedProvider, setSelectedProvider] = useState<AIProvider>(saved.provider);
     const [apiKeys, setApiKeys] = useState<Record<AIProvider, string>>(saved.apiKeys);
+    const [theme, setTheme] = useState(getThemePreference);
+
+    const chooseTheme = (next: ThemePreference) => {
+        setTheme(next);
+        setThemePreference(next);
+    };
 
     // Close the settings modal with Escape
     useEffect(() => {
@@ -68,6 +82,28 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                     AI Provider Settings
                 </h2>
 
+                <p id="appearance-label" className="text-sm mb-2" style={{ color: 'var(--text-muted)' }}>
+                    Appearance
+                </p>
+                <div role="group" aria-labelledby="appearance-label" className="flex gap-2 mb-4">
+                    {THEMES.map((option) => (
+                        <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => chooseTheme(option.id)}
+                            aria-pressed={theme === option.id}
+                            className="flex-1 p-2 rounded-xl border text-sm font-medium transition-all"
+                            style={{
+                                color: 'var(--text-dark)',
+                                borderColor: theme === option.id ? 'var(--accent-pink)' : 'var(--border-light)',
+                                backgroundColor: theme === option.id ? 'var(--accent-pink-light)' : 'var(--bg-white)'
+                            }}
+                        >
+                            {option.name}
+                        </button>
+                    ))}
+                </div>
+
                 {/* Provider Selection */}
                 <p className="text-sm mb-2" style={{ color: 'var(--text-muted)' }}>
                     Select AI Provider
@@ -80,7 +116,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             className="flex items-center gap-3 p-3 rounded-xl transition-all text-left"
                             style={{
                                 borderColor: selectedProvider === provider.id ? 'var(--accent-pink)' : 'var(--border-light)',
-                                backgroundColor: selectedProvider === provider.id ? 'var(--accent-pink-light)' : 'white'
+                                backgroundColor: selectedProvider === provider.id ? 'var(--accent-pink-light)' : 'var(--bg-white)'
                             }}
                         >
                             <div

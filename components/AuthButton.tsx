@@ -41,7 +41,7 @@ const AuthButton: React.FC = () => {
         className="auth-btn auth-btn-signin"
         style={{
           borderColor: 'var(--border-light)',
-          backgroundColor: 'white',
+          backgroundColor: 'var(--bg-white)',
           color: 'var(--text-dark)',
         }}
       >
@@ -69,7 +69,7 @@ const AuthButton: React.FC = () => {
           aria-haspopup="true"
           style={{
             borderColor: 'var(--border-light)',
-            backgroundColor: 'white',
+            backgroundColor: 'var(--bg-white)',
             color: 'var(--text-dark)',
           }}
         >
@@ -94,7 +94,7 @@ const AuthButton: React.FC = () => {
           <div
             className="auth-dropdown animate-fadeIn"
             style={{
-              backgroundColor: 'white',
+              backgroundColor: 'var(--bg-white)',
               border: '1px solid var(--border-light)',
             }}
           >
