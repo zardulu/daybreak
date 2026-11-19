@@ -5,6 +5,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Daybreak</title>
+  <script>
+    // Set the theme before first paint; theme.ts owns it afterwards (same key and rules).
+    (function () {
+      var t;
+      try { t = localStorage.getItem('daybreak-theme'); } catch (e) { /* follow the OS */ }
+      if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
   <link rel="icon" type="image/png" href="/icon-192.png">
   <!-- The manifest makes "Add to Home Screen" open as an app; iOS only allows notifications there. -->
   <link rel="manifest" href="/manifest.webmanifest">

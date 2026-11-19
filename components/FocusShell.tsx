@@ -70,7 +70,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                         style={{
                             borderColor: 'var(--border-light)',
                             color: 'var(--text-muted)',
-                            backgroundColor: 'white'
+                            backgroundColor: 'var(--bg-white)'
                         }}
                         aria-label="About Daybreak"
                     >
@@ -83,7 +83,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                     <div
                         className="absolute right-0 top-10 w-64 sm:w-72 p-3 sm:p-4 rounded-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50"
                         style={{
-                            backgroundColor: 'white',
+                            backgroundColor: 'var(--bg-white)',
                             border: '1px solid var(--border-light)'
                         }}
                     >
@@ -94,7 +94,7 @@ const FocusShell: React.FC<FocusShellProps> = ({
                             A gentle focus companion that helps you focus on your tasks by checking in on your progress.
                             <strong> Bring your own API key</strong> (Gemini, OpenAI, etc).
                             {user ? ' Your chat history and AI provider settings are synced to your account.' : ' Chats are ephemeral. Sign in to save your history and settings across devices.'}
-                            Keep this tab open for reliable check-in notifications.
+                            {' '}Keep this tab open for reliable check-in notifications.
                         </p>
                     </div>
                 </div>

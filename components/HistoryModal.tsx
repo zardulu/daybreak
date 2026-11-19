@@ -67,7 +67,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ onClose }) => {
                             <button
                                 onClick={() => setSelected(session)}
                                 className="w-full text-left p-3 rounded-xl transition-all"
-                                style={{ backgroundColor: 'white', border: '1px solid var(--border-light)' }}
+                                style={{ backgroundColor: 'var(--bg-white)', border: '1px solid var(--border-light)' }}
                             >
                                 <span className="block text-sm font-medium" style={{ color: 'var(--text-dark)' }}>
                                     {formatSessionDate(session.date)}
@@ -116,7 +116,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ onClose }) => {
                             style={{
                                 maxWidth: '85%',
                                 color: 'var(--text-dark)',
-                                backgroundColor: message.sender === 'user' ? 'var(--accent-pink-light)' : 'white',
+                                backgroundColor: message.sender === 'user' ? 'var(--accent-pink-light)' : 'var(--bg-white)',
                             }}
                         >
                             {message.text}
